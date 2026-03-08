@@ -1,0 +1,14 @@
+rules:
+  - id: expense-ratio-warning
+    type: expense_ratio_gt
+    threshold: 0.8
+    title: "High spending detected"
+    message: "Expenses are above 80% of income in the selected period."
+    severity: warning
+
+  - id: high-single-expense-critical
+    type: high_single_expense
+    threshold: 1000
+    title: "Large expense detected"
+    message: "At least one expense exceeded 1000."
+    severity: critical

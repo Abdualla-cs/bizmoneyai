@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-start: #f0fdf4;
+  --bg-end: #fefce8;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top left, var(--bg-start), var(--bg-end));
+  color: #0f172a;
+}
+
+input,
+select,
+button,
+textarea {
+  @apply rounded-md border border-slate-300 px-3 py-2;
+}
+
+button {
+  @apply bg-ink text-white hover:opacity-90;
+}
