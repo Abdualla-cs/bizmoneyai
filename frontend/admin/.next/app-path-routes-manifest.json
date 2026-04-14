@@ -1,0 +1,11 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/budgets/page": "/budgets",
+  "/categories/page": "/categories",
+  "/insights/page": "/insights",
+  "/login/page": "/login",
+  "/logs/page": "/logs",
+  "/transactions/page": "/transactions",
+  "/page": "/",
+  "/users/page": "/users"
+}
