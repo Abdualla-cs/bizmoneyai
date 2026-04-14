@@ -170,9 +170,8 @@ export default function DataTable<Row>({
                           <button
                             type="button"
                             onClick={() => onSortChange(activeSortKey)}
-                            className={`inline-flex items-center gap-2 bg-transparent px-0 py-0 text-xs uppercase tracking-[0.18em] ${
-                              isActive ? "text-slate-900" : "text-slate-500"
-                            }`}
+                            className={`inline-flex items-center gap-2 bg-transparent px-0 py-0 text-xs uppercase tracking-[0.18em] ${isActive ? "text-slate-900" : "text-slate-500"
+                              }`}
                           >
                             <span>{column.label}</span>
                             <span className="text-[10px]">{isActive ? (sortOrder === "asc" ? "↑" : "↓") : "↕"}</span>

@@ -88,7 +88,7 @@ export default function AdminUserSelector({
       <button
         type="button"
         disabled={disabled}
-        aria-expanded={open}
+        aria-expanded={open.toString()}
         aria-haspopup="listbox"
         onClick={() => {
           if (!disabled) {
@@ -116,55 +116,56 @@ export default function AdminUserSelector({
             className="w-full bg-white"
           />
 
-          <div role="listbox" className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
-            <button
-              type="button"
-              onClick={() => selectUser(null)}
-              className={`w-full rounded-xl border px-4 py-3 text-left transition ${
-                value === null
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
-              }`}
-            >
-              <p className="text-sm font-semibold">All users</p>
-              <p className={`text-sm ${value === null ? "text-slate-200" : "text-slate-500"}`}>
-                Show the current global system analytics view
-              </p>
-            </button>
+          <ul role="listbox" className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+            <li role="option" aria-selected={value === null}>
+              <button
+                type="button"
+                onClick={() => selectUser(null)}
+                className={`w-full rounded-xl border px-4 py-3 text-left transition ${value === null
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
+                  }`}
+              >
+                <p className="text-sm font-semibold">All users</p>
+                <p className={`text-sm ${value === null ? "text-slate-200" : "text-slate-500"}`}>
+                  Show the current global system analytics view
+                </p>
+              </button>
+            </li>
 
             {filteredUsers.length > 0 ? (
               filteredUsers.map((user) => {
                 const isSelected = user.user_id === value;
 
                 return (
-                  <button
-                    key={user.user_id}
-                    type="button"
-                    onClick={() => selectUser(user.user_id)}
-                    className={`w-full rounded-xl border px-4 py-3 text-left transition ${
-                      isSelected
-                        ? "border-teal-500 bg-teal-50 text-slate-900"
-                        : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{user.name}</p>
-                        <p className="truncate text-sm text-slate-500">{user.email}</p>
+                  <li key={user.user_id} role="option" aria-selected={isSelected}>
+                    <button
+                      type="button"
+                      onClick={() => selectUser(user.user_id)}
+                      className={`w-full rounded-xl border px-4 py-3 text-left transition ${isSelected
+                          ? "border-teal-500 bg-teal-50 text-slate-900"
+                          : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{user.name}</p>
+                          <p className="truncate text-sm text-slate-500">{user.email}</p>
+                        </div>
+                        {isSelected && (
+                          <span className="rounded-full bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white">
+                            Selected
+                          </span>
+                        )}
                       </div>
-                      {isSelected && (
-                        <span className="rounded-full bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white">
-                          Selected
-                        </span>
-                      )}
-                    </div>
-                  </button>
+                    </button>
+                  </li>
                 );
               })
             ) : (
-              <p className="px-2 py-4 text-sm text-slate-500">No users match your search.</p>
+              <li className="px-2 py-4 text-sm text-slate-500">No users match your search.</li>
             )}
-          </div>
+          </ul>
         </div>
       )}
     </div>
