@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/budgets/page": "/budgets",
+  "/categories/page": "/categories",
+  "/dashboard/page": "/dashboard",
+  "/insights/page": "/insights",
+  "/login/page": "/login",
+  "/page": "/",
+  "/supabase-example/page": "/supabase-example",
+  "/register/page": "/register",
+  "/transactions/page": "/transactions"
+}
