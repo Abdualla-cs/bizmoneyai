@@ -1,0 +1,188 @@
+"use client";
+
+import { useState } from "react";
+
+import AdminMetricCard from "@/components/AdminMetricCard";
+import AdminPanel from "@/components/AdminPanel";
+import AdminShell from "@/components/AdminShell";
+import DataTable, { DataTableColumn, DataTableFilterConfig } from "@/components/DataTable";
+import { useAdminDataTable } from "@/hooks/useAdminDataTable";
+import api from "@/lib/api";
+import { getErrorMessage } from "@/lib/errors";
+import { formatCompactNumber, formatDateTime } from "@/lib/format";
+import { AdminUserRow, AdminUsersResponse } from "@/lib/types";
+
+export default function AdminUsersPage() {
+  const table = useAdminDataTable<AdminUsersResponse, AdminUserRow>({
+    queryKey: "admin-users",
+    endpoint: "/admin/users",
+    extractRows: (response) => response.users,
+    extractTotal: (response) => response.total,
+    initialFilters: { is_active: "" },
+    initialLimit: 10,
+    defaultSort: { key: "created_at", order: "desc" },
+    errorMessage: "Failed to load users.",
+  });
+
+  const [actionError, setActionError] = useState("");
+  const [busyUserId, setBusyUserId] = useState<number | null>(null);
+
+  const toggleStatus = async (user: AdminUserRow) => {
+    setBusyUserId(user.user_id);
+    setActionError("");
+    try {
+      await api.patch(`/admin/users/${user.user_id}/status`, {
+        is_active: !user.is_active,
+      });
+      await table.refetch();
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to update the user status."));
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  const deleteUser = async (user: AdminUserRow) => {
+    if (!window.confirm(`Delete ${user.email}? This cannot be undone.`)) {
+      return;
+    }
+
+    setBusyUserId(user.user_id);
+    setActionError("");
+    try {
+      await api.delete(`/admin/users/${user.user_id}`);
+      await table.refetch();
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to delete the user."));
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  const filters: DataTableFilterConfig[] = [
+    {
+      key: "is_active",
+      type: "select",
+      options: [
+        { label: "All statuses", value: "" },
+        { label: "Active only", value: "true" },
+        { label: "Inactive only", value: "false" },
+      ],
+    },
+  ];
+
+  const columns: DataTableColumn<AdminUserRow>[] = [
+    {
+      key: "user",
+      label: "User",
+      sortable: true,
+      sortKey: "name",
+      render: (user) => (
+        <div>
+          <p className="font-medium text-slate-900">{user.name}</p>
+          <p className="text-slate-500">{user.email}</p>
+          <p className="mt-1 text-xs text-slate-400">{user.insights_count} insights</p>
+        </div>
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      sortable: true,
+      sortKey: "is_active",
+      render: (user) => (
+        <span
+          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+            user.is_active ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+          }`}
+        >
+          {user.is_active ? "Active" : "Inactive"}
+        </span>
+      ),
+    },
+    { key: "transactions", label: "Transactions", sortable: true, sortKey: "transactions_count", render: (user) => <span className="text-slate-600">{user.transactions_count}</span> },
+    { key: "categories", label: "Categories", sortable: true, sortKey: "categories_count", render: (user) => <span className="text-slate-600">{user.categories_count}</span> },
+    { key: "budgets", label: "Budgets", sortable: true, sortKey: "budgets_count", render: (user) => <span className="text-slate-600">{user.budgets_count}</span> },
+    {
+      key: "last_activity",
+      label: "Last activity",
+      sortable: true,
+      sortKey: "last_activity",
+      render: (user) => <span className="text-slate-500">{formatDateTime(user.last_activity)}</span>,
+    },
+    {
+      key: "actions",
+      label: "Actions",
+      align: "right",
+      render: (user) => (
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => void toggleStatus(user)}
+            disabled={busyUserId === user.user_id}
+            className={user.is_active ? "bg-amber-500 px-3 py-2 text-xs" : "bg-emerald-600 px-3 py-2 text-xs"}
+          >
+            {user.is_active ? "Deactivate" : "Activate"}
+          </button>
+          <button
+            onClick={() => void deleteUser(user)}
+            disabled={busyUserId === user.user_id}
+            className="bg-rose-600 px-3 py-2 text-xs"
+          >
+            Delete
+          </button>
+        </div>
+      ),
+    },
+  ];
+
+  const usersSummary = table.data?.summary;
+  const error = actionError || table.error;
+
+  return (
+    <AdminShell
+      title="User Monitoring"
+      description="Review user activity, search accounts quickly, suspend access when needed, and remove accounts when moderation or support requires it."
+      actions={
+        <button onClick={() => void table.refetch()} className="bg-white px-4 py-2 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">
+          Refresh
+        </button>
+      }
+    >
+      <div className="space-y-6">
+        {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <AdminMetricCard label="Users" value={formatCompactNumber(table.total)} helper="Loaded from current filters" />
+          <AdminMetricCard label="Active" value={formatCompactNumber(usersSummary?.active_count ?? 0)} helper="Allowed to sign in" tone="success" />
+          <AdminMetricCard label="Inactive" value={formatCompactNumber(usersSummary?.inactive_count ?? 0)} helper="Blocked from user auth" tone="warning" />
+        </div>
+
+        <AdminPanel title="Manage Users" description="Search by name or email, review activity metrics, and control account access.">
+          <DataTable
+            columns={columns}
+            rows={table.rows}
+            rowKey={(row) => row.user_id}
+            total={table.total}
+            limit={table.limit}
+            currentPage={table.currentPage}
+            totalPages={table.totalPages}
+            search={table.search}
+            onSearchChange={table.setSearch}
+            searchPlaceholder="Search users by name or email"
+            filters={filters}
+            filterValues={table.filters}
+            onFilterChange={table.setFilter}
+            sortBy={table.sortBy}
+            sortOrder={table.sortOrder}
+            onSortChange={table.setSort}
+            onPageChange={table.setPage}
+            onPageSizeChange={table.setPageSize}
+            emptyMessage="No users matched the current filters."
+            isLoading={table.isLoading}
+            isFetching={table.isFetching}
+          />
+        </AdminPanel>
+      </div>
+    </AdminShell>
+  );
+}
