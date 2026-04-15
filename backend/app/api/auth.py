@@ -3,6 +3,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.db.session import get_db
@@ -41,7 +42,23 @@ def login(payload: UserLogin, response: Response, db: Session = Depends(get_db))
         value=token,
         httponly=True,
         samesite="lax",
-        secure=settings.env == "production",
+        secure=settings.use_secure_cookies,
         max_age=settings.access_token_expire_minutes * 60,
     )
     return user
+
+
+@router.get("/me", response_model=UserOut)
+def me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(
+        key="access_token",
+        httponly=True,
+        samesite="lax",
+        secure=settings.use_secure_cookies,
+    )
+    return {"message": "Logged out"}
