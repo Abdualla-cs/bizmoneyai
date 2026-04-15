@@ -2,6 +2,7 @@ from collections import defaultdict
 from calendar import monthrange
 from datetime import date
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.budget import Budget
@@ -50,7 +51,7 @@ def _spent_amounts_by_budget(db: Session, rows: list[tuple[Budget, str, str, str
             Transaction.amount,
         )
         .filter(
-            Transaction.type == "expense",
+            func.lower(Transaction.type) == "expense",
             Transaction.user_id.in_(user_ids),
             Transaction.category_id.in_(category_ids),
             Transaction.date >= range_start,

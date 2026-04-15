@@ -1,10 +1,35 @@
 from datetime import date
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import app.models  # noqa: F401
+from app.db.session import Base
 from app.models.budget import Budget
 from app.models.category import Category
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.budget_metrics import list_budget_snapshots
+
+
+@pytest.fixture()
+def db_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+
+    try:
+        yield db
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 def test_list_budget_snapshots_calculates_spend_and_status(db_session):
@@ -28,7 +53,7 @@ def test_list_budget_snapshots_calculates_spend_and_status(db_session):
                 user_id=user.user_id,
                 category_id=category.category_id,
                 amount=200,
-                type="expense",
+                type="EXPENSE",
                 description="Tools",
                 date=date(2026, 4, 5),
             ),
