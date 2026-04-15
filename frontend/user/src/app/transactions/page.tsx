@@ -174,9 +174,9 @@ export default function TransactionsPage() {
       setError(
         typeof detail === "string"
           ? detail
-          : Array.isArray(detail) && typeof detail[0]?.msg === "string"
-            ? detail[0].msg
-            : "File import failed. Format: category_id, amount, type, description, date in CSV or XLSX.",
+            : Array.isArray(detail) && typeof detail[0]?.msg === "string"
+              ? detail[0].msg
+            : "File import failed.",
       );
     } finally {
       if (fileRef.current) fileRef.current.value = "";
@@ -302,7 +302,7 @@ export default function TransactionsPage() {
             <input
               ref={fileRef}
               type="file"
-              accept=".csv,.xlsx"
+              accept=".csv"
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -314,7 +314,7 @@ export default function TransactionsPage() {
 
         <div className="overflow-x-auto rounded-xl bg-white shadow">
           {txs.length === 0 ? (
-            <p className="p-8 text-center text-sm text-slate-400">No transactions found. Add one above or adjust filters.</p>
+            <p className="p-8 text-center text-sm text-slate-400">No transactions found.</p>
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">

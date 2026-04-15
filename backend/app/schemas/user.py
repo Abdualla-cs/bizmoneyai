@@ -18,6 +18,7 @@ class UserOut(BaseModel):
     user_id: int
     name: str
     email: EmailStr
+    is_active: bool
     created_at: datetime
 
     class Config:

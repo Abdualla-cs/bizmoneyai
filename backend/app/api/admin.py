@@ -46,6 +46,8 @@ from app.schemas.admin_panel import (
     AdminTransactionSummary,
     AdminTransactionOut,
     AdminTransactionTrend,
+    AdminUserFinancialSummary,
+    AdminUserOverview,
     AdminUserRow,
     AdminUserSummary,
     AdminUsersResponse,
@@ -106,10 +108,30 @@ def _sort_value(value):
     return (0, value)
 
 
+def _validate_sort_by(sort_by: str, allowed_sort_fields: set[str]) -> None:
+    if sort_by not in allowed_sort_fields:
+        allowed = ", ".join(sorted(allowed_sort_fields))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported sort_by '{sort_by}'. Allowed values: {allowed}",
+        )
+
+
+def _order_query(query, sort_by: str, sort_order: str, sort_columns: dict[str, object], tie_breaker):
+    order_column = sort_columns[sort_by]
+    return query.order_by(
+        order_column.asc() if sort_order == "asc" else order_column.desc(),
+        tie_breaker.asc() if sort_order == "asc" else tie_breaker.desc(),
+    )
+
+
 def _sort_rows(items: list[dict], sort_by: str, sort_order: str, value_getters: dict[str, Callable[[dict], object]]) -> list[dict]:
     getter = value_getters.get(sort_by)
     if getter is None:
-        return items
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported sort_by '{sort_by}'",
+        )
     return sorted(items, key=lambda item: _sort_value(getter(item)), reverse=sort_order == "desc")
 
 
@@ -141,6 +163,42 @@ def _user_stat_maps(db: Session, user_id: int | None = None):
     budget_map = _user_metric_map(db, Budget, Budget.budget_id, user_id=user_id)
     insight_map = _user_metric_map(db, AIInsight, AIInsight.insight_id, user_id=user_id)
     return tx_map, category_map, budget_map, insight_map
+
+
+def _build_admin_user_row(db: Session, user: User) -> AdminUserRow:
+    tx_map, category_map, budget_map, insight_map = _user_stat_maps(db, user_id=user.user_id)
+    tx_stats = tx_map.get(user.user_id, {"count": 0, "last": None})
+    category_stats = category_map.get(user.user_id, {"count": 0, "last": None})
+    budget_stats = budget_map.get(user.user_id, {"count": 0, "last": None})
+    insight_stats = insight_map.get(user.user_id, {"count": 0, "last": None})
+    last_activity = max(
+        (
+            value
+            for value in [
+                user.created_at,
+                tx_stats["last"],
+                category_stats["last"],
+                budget_stats["last"],
+                insight_stats["last"],
+            ]
+            if value is not None
+        ),
+        default=None,
+    )
+    return AdminUserRow.model_validate(
+        {
+            "user_id": user.user_id,
+            "name": user.name,
+            "email": user.email,
+            "is_active": user.is_active,
+            "created_at": user.created_at,
+            "transactions_count": int(tx_stats["count"]),
+            "categories_count": int(category_stats["count"]),
+            "budgets_count": int(budget_stats["count"]),
+            "insights_count": int(insight_stats["count"]),
+            "last_activity": last_activity,
+        }
+    )
 
 
 def _serialize_logs(rows) -> list[AdminLogRow]:
@@ -240,12 +298,27 @@ def get_admin_analytics_budgets_endpoint(
 def list_users(
     search: str | None = Query(default=None),
     is_active: bool | None = Query(default=None),
-    limit: int = Query(default=10, ge=1, le=100),
+    limit: int = Query(default=10, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     sort_by: str = Query(default="created_at"),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
+    sort_columns = {
+        "name": func.lower(User.name),
+        "email": func.lower(User.email),
+        "created_at": User.created_at,
+        "is_active": User.is_active,
+    }
+    row_sort_getters = {
+        "transactions_count": lambda item: item["transactions_count"],
+        "categories_count": lambda item: item["categories_count"],
+        "budgets_count": lambda item: item["budgets_count"],
+        "insights_count": lambda item: item["insights_count"],
+        "last_activity": lambda item: item["last_activity"],
+    }
+    _validate_sort_by(sort_by, set(sort_columns) | set(row_sort_getters))
+
     query = db.query(User)
     pattern = _search_pattern(search)
     if pattern:
@@ -255,7 +328,10 @@ def list_users(
     if is_active is not None:
         query = query.filter(User.is_active == is_active)
 
-    users = query.order_by(User.created_at.desc()).all()
+    if sort_by in sort_columns:
+        users = _order_query(query, sort_by, sort_order, sort_columns, User.user_id).all()
+    else:
+        users = query.order_by(User.created_at.desc(), User.user_id.desc()).all()
     tx_map, category_map, budget_map, insight_map = _user_stat_maps(db)
 
     rows = []
@@ -287,22 +363,8 @@ def list_users(
             }
         )
 
-    rows = _sort_rows(
-        rows,
-        sort_by,
-        sort_order,
-        {
-            "created_at": lambda item: item["created_at"],
-            "name": lambda item: item["name"],
-            "email": lambda item: item["email"],
-            "is_active": lambda item: item["is_active"],
-            "transactions_count": lambda item: item["transactions_count"],
-            "categories_count": lambda item: item["categories_count"],
-            "budgets_count": lambda item: item["budgets_count"],
-            "insights_count": lambda item: item["insights_count"],
-            "last_activity": lambda item: item["last_activity"],
-        },
-    )
+    if sort_by in row_sort_getters:
+        rows = _sort_rows(rows, sort_by, sort_order, row_sort_getters)
     total = len(rows)
     page_rows = [AdminUserRow.model_validate(row) for row in _apply_pagination(rows, limit, offset)]
     active_count = sum(1 for row in rows if row["is_active"])
@@ -317,6 +379,68 @@ def list_users(
             active_count=active_count,
             inactive_count=total - active_count,
         ),
+    )
+
+
+@router.get("/users/{user_id}/overview", response_model=AdminUserOverview)
+def get_user_overview(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    user = _get_user_or_404(db, user_id)
+    total_income = (
+        db.query(func.coalesce(func.sum(Transaction.amount), 0.0))
+        .filter(Transaction.user_id == user_id, Transaction.type == "income")
+        .scalar()
+    )
+    total_expense = (
+        db.query(func.coalesce(func.sum(Transaction.amount), 0.0))
+        .filter(Transaction.user_id == user_id, Transaction.type == "expense")
+        .scalar()
+    )
+    budget_snapshots = list_budget_snapshots(db, user_id=user_id)
+    recent_logs = _serialize_logs(
+        _logs_query(db)
+        .filter(SystemLog.user_id == user_id)
+        .order_by(SystemLog.created_at.desc(), SystemLog.log_id.desc())
+        .limit(8)
+        .all()
+    )
+
+    recent_insights = [
+        AdminInsightOut(
+            insight_id=insight.insight_id,
+            user_id=insight.user_id,
+            user_name=user.name,
+            user_email=user.email,
+            title=insight.title,
+            message=insight.message,
+            severity=insight.severity,
+            period_start=insight.period_start,
+            period_end=insight.period_end,
+            created_at=insight.created_at,
+        )
+        for insight in (
+            db.query(AIInsight)
+            .filter(AIInsight.user_id == user_id)
+            .order_by(AIInsight.created_at.desc(), AIInsight.insight_id.desc())
+            .limit(5)
+            .all()
+        )
+    ]
+
+    income = float(total_income or 0.0)
+    expense = float(total_expense or 0.0)
+    return AdminUserOverview(
+        user=_build_admin_user_row(db, user),
+        financial_summary=AdminUserFinancialSummary(
+            total_income=income,
+            total_expense=expense,
+            balance=income - expense,
+            over_budget_count=sum(1 for snapshot in budget_snapshots if snapshot["status"] == "over"),
+        ),
+        recent_logs=recent_logs,
+        recent_insights=recent_insights,
     )
 
 
@@ -484,12 +608,25 @@ def list_admin_categories(
     user_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
     category_type: Literal["income", "expense", "both"] | None = Query(default=None, alias="type"),
-    limit: int = Query(default=10, ge=1, le=100),
+    limit: int = Query(default=10, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     sort_by: str = Query(default="created_at"),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
+    sort_columns = {
+        "name": func.lower(Category.name),
+        "created_at": Category.created_at,
+        "type": Category.type,
+        "user_name": func.lower(User.name),
+        "user_email": func.lower(User.email),
+    }
+    row_sort_getters = {
+        "transactions_count": lambda item: item["transactions_count"],
+        "budgets_count": lambda item: item["budgets_count"],
+    }
+    _validate_sort_by(sort_by, set(sort_columns) | set(row_sort_getters))
+
     tx_count_rows = (
         db.query(Transaction.category_id, func.count(Transaction.transaction_id))
         .group_by(Transaction.category_id)
@@ -518,8 +655,13 @@ def list_admin_categories(
             )
         )
 
+    if sort_by in sort_columns:
+        query = _order_query(query, sort_by, sort_order, sort_columns, Category.category_id)
+    else:
+        query = query.order_by(Category.created_at.desc(), Category.category_id.desc())
+
     rows = []
-    for category, user_name, user_email in query.order_by(Category.created_at.desc()).all():
+    for category, user_name, user_email in query.all():
         rows.append(
             {
                 "category_id": category.category_id,
@@ -533,20 +675,8 @@ def list_admin_categories(
                 "created_at": category.created_at,
             }
         )
-    rows = _sort_rows(
-        rows,
-        sort_by,
-        sort_order,
-        {
-            "created_at": lambda item: item["created_at"],
-            "name": lambda item: item["name"],
-            "type": lambda item: item["type"],
-            "user_name": lambda item: item["user_name"],
-            "user_email": lambda item: item["user_email"],
-            "transactions_count": lambda item: item["transactions_count"],
-            "budgets_count": lambda item: item["budgets_count"],
-        },
-    )
+    if sort_by in row_sort_getters:
+        rows = _sort_rows(rows, sort_by, sort_order, row_sort_getters)
     total = len(rows)
     return AdminCategoriesResponse(
         total=total,

@@ -32,3 +32,15 @@ class TransactionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TransactionImportRejectedRow(BaseModel):
+    row_number: int
+    reason: str
+
+
+class TransactionImportResult(BaseModel):
+    imported_count: int
+    skipped_count: int
+    rejected_rows: list[TransactionImportRejectedRow]
+    transactions: list[TransactionOut]

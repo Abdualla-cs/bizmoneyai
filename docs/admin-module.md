@@ -9,7 +9,8 @@ The current admin module is primarily read-heavy. Most pages focus on visibility
 ## Admin Features
 
 - Admin-only authentication with a dedicated cookie.
-- Global dashboard with optional per-user analytics scope.
+- Global dashboard with a visible per-user selector made of selectable user bubbles/cards.
+- Selected-user dashboard mode that scopes analytics, charts, recent logs, and account details to one user.
 - User monitoring with search, activity counts, enable/disable, and delete actions.
 - Read-only transaction monitoring with filters for user, category, type, and date range.
 - Category moderation with filtering, delete action, and default-category seeding.
@@ -20,7 +21,7 @@ The current admin module is primarily read-heavy. Most pages focus on visibility
 ## Available Pages
 
 - `/login`: admin sign-in page.
-- `/`: monitoring dashboard with overview metrics, charts, recent logs, and optional user scoping.
+- `/`: monitoring dashboard with overview metrics, charts, recent logs, visible user selection, and selected-user detail panels.
 - `/users`: searchable user table with status toggle and delete action.
 - `/transactions`: read-only operational ledger view.
 - `/categories`: category review, moderation, and default-category creation.
@@ -50,10 +51,13 @@ All dashboard and analytics endpoints accept optional `user_id`. Overview and tr
 ### User Operations
 
 - `GET /admin/users`
+- `GET /admin/users/{user_id}/overview`
 - `PATCH /admin/users/{user_id}/status`
 - `DELETE /admin/users/{user_id}`
 
 `GET /admin/users` supports search, active-state filtering, pagination, and sorting across account and activity fields.
+
+`GET /admin/users/{user_id}/overview` powers the selected-user dashboard panel. It returns the user's basic account row, transaction/category/budget/insight counts, last activity, financial summary, recent user logs, and recent insights.
 
 ### Transaction Operations
 
@@ -91,7 +95,8 @@ Supports search, `event_type`, `level`, `user_id`, `admin_id`, date range filter
 
 - Every `/admin/*` route requires a valid `admin_access_token` cookie.
 - If a normal user session hits an admin route, the request is rejected with `403 Admin access required`.
-- The dashboard can run in global mode or scoped mode for a single user. The selected scope changes every analytics request, not just the UI.
+- The dashboard can run in global mode or scoped mode for a single user.
+- The visible user selector stores the selected `user_id` in dashboard state. Choosing a user sends that `user_id` to every dashboard analytics request and loads `/admin/users/{user_id}/overview`; choosing `All Users` clears the state and returns all analytics to global mode.
 - Admin write actions are logged into `system_log` with actor and target metadata when available.
 - Deleting a category from the admin module also removes related budgets and transactions for that category.
 - User status changes use `PATCH /admin/users/{user_id}/status` rather than deleting the account outright.

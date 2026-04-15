@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     cors_origins: str = "http://localhost:3000"
+    cookie_secure: bool | None = None
+
+    @property
+    def use_secure_cookies(self) -> bool:
+        return self.cookie_secure if self.cookie_secure is not None else self.env == "production"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

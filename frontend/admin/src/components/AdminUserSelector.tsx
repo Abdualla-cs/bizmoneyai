@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 
 import { AdminUserRow } from "@/lib/types";
 
@@ -19,15 +19,8 @@ export default function AdminUserSelector({
   disabled = false,
   loading = false,
 }: AdminUserSelectorProps) {
-  const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const containerRef = useRef<HTMLDivElement | null>(null);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
-
-  const selectedUser = useMemo(
-    () => users.find((user) => user.user_id === value) ?? null,
-    [users, value],
-  );
 
   const filteredUsers = useMemo(() => {
     if (!deferredSearch) {
@@ -37,136 +30,82 @@ export default function AdminUserSelector({
     return users.filter((user) => `${user.name} ${user.email}`.toLowerCase().includes(deferredSearch));
   }, [deferredSearch, users]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-        setSearch("");
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        setSearch("");
-      }
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  const closeMenu = () => {
-    setOpen(false);
-    setSearch("");
-  };
-
-  const selectUser = (nextUserId: number | null) => {
-    onChange(nextUserId);
-    closeMenu();
-  };
-
-  const summaryLabel = selectedUser ? selectedUser.name : "All users";
-  const summaryDescription = selectedUser
-    ? selectedUser.email
-    : "Global system analytics across every user account";
-
   return (
-    <div ref={containerRef} className="relative">
-      <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.22em] text-slate-500">
-        <span>Analytics Scope</span>
-        <span>{selectedUser ? "User view" : "Global view"}</span>
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search users"
+          className="w-full bg-white xl:max-w-xs"
+          disabled={disabled}
+        />
       </div>
 
-      <button
-        type="button"
-        disabled={disabled}
-        aria-expanded={open.toString()}
-        aria-haspopup="listbox"
-        onClick={() => {
-          if (!disabled) {
-            setOpen((current) => !current);
-          }
-        }}
-        className="flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-slate-900 shadow-sm transition hover:border-slate-300 hover:shadow-md"
-      >
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">{summaryLabel}</p>
-          <p className="truncate text-sm text-slate-500">{summaryDescription}</p>
-        </div>
-        <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-          {loading ? "Updating" : open ? "Close" : "Select"}
-        </span>
-      </button>
+      <div className="flex max-h-72 flex-wrap gap-3 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(null)}
+          className={`min-h-[76px] min-w-[180px] rounded-2xl border px-4 py-3 text-left shadow-sm transition ${
+            value === null
+              ? "border-slate-950 bg-slate-950 text-white shadow-slate-300"
+              : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:shadow-md"
+          }`}
+        >
+          <span className="block text-sm font-semibold">All Users</span>
+        </button>
 
-      {open && (
-        <div className="absolute left-0 right-0 z-20 mt-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
-          <input
-            value={search}
-            autoFocus
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search users by name or email"
-            className="w-full bg-white"
-          />
-
-          <ul role="listbox" className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
-            <li role="option" aria-selected={value === null}>
-              <button
-                type="button"
-                onClick={() => selectUser(null)}
-                className={`w-full rounded-xl border px-4 py-3 text-left transition ${value === null
-                    ? "border-slate-900 bg-slate-900 text-white"
-                    : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
+        {filteredUsers.map((user) => {
+          const isSelected = user.user_id === value;
+          return (
+            <button
+              key={user.user_id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(user.user_id)}
+              className={`min-h-[76px] min-w-[190px] max-w-[240px] rounded-2xl border px-4 py-3 text-left shadow-sm transition ${
+                isSelected
+                  ? "border-teal-500 bg-teal-50 text-slate-950 shadow-teal-100 ring-2 ring-teal-500/20"
+                  : "border-slate-200 bg-white text-slate-900 hover:border-teal-200 hover:bg-white hover:shadow-md"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="block truncate text-sm font-semibold">{user.name}</span>
+                  <span className="mt-1 block truncate text-xs text-slate-500">{user.email}</span>
+                </div>
+                <span
+                  className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${
+                    user.is_active ? "bg-emerald-500" : "bg-amber-500"
                   }`}
-              >
-                <p className="text-sm font-semibold">All users</p>
-                <p className={`text-sm ${value === null ? "text-slate-200" : "text-slate-500"}`}>
-                  Show the current global system analytics view
-                </p>
-              </button>
-            </li>
+                  aria-label={user.is_active ? "Active" : "Inactive"}
+                />
+              </div>
+              <div className="mt-3 flex items-center justify-between text-xs">
+                <span className={isSelected ? "font-semibold text-teal-700" : "text-slate-500"}>
+                  {isSelected ? "Selected" : `${user.transactions_count} tx`}
+                </span>
+                <span className={isSelected ? "text-teal-700" : "text-slate-400"}>
+                  {user.is_active ? "Active" : "Inactive"}
+                </span>
+              </div>
+            </button>
+          );
+        })}
 
-            {filteredUsers.length > 0 ? (
-              filteredUsers.map((user) => {
-                const isSelected = user.user_id === value;
+        {filteredUsers.length === 0 && (
+          <div className="flex min-h-[76px] flex-1 items-center rounded-2xl border border-dashed border-slate-300 bg-white px-4 text-sm text-slate-500">
+            No users match this search.
+          </div>
+        )}
+      </div>
 
-                return (
-                  <li key={user.user_id} role="option" aria-selected={isSelected}>
-                    <button
-                      type="button"
-                      onClick={() => selectUser(user.user_id)}
-                      className={`w-full rounded-xl border px-4 py-3 text-left transition ${isSelected
-                          ? "border-teal-500 bg-teal-50 text-slate-900"
-                          : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
-                        }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold">{user.name}</p>
-                          <p className="truncate text-sm text-slate-500">{user.email}</p>
-                        </div>
-                        {isSelected && (
-                          <span className="rounded-full bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white">
-                            Selected
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  </li>
-                );
-              })
-            ) : (
-              <li className="px-2 py-4 text-sm text-slate-500">No users match your search.</li>
-            )}
-          </ul>
-        </div>
+      {loading && <p className="text-sm font-medium text-teal-700">Updating selected-user analytics...</p>}
+      {!loading && users.length === 0 && (
+        <p className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-500">
+          No users exist yet.
+        </p>
       )}
     </div>
   );

@@ -138,6 +138,13 @@ class AdminUserSummary(BaseModel):
     inactive_count: int
 
 
+class AdminUserFinancialSummary(BaseModel):
+    total_income: float
+    total_expense: float
+    balance: float
+    over_budget_count: int
+
+
 class AdminUsersResponse(AdminPaginationMeta):
     users: list[AdminUserRow]
     summary: AdminUserSummary
@@ -265,6 +272,13 @@ class AdminInsightOut(BaseModel):
     period_start: date
     period_end: date
     created_at: datetime
+
+
+class AdminUserOverview(BaseModel):
+    user: AdminUserRow
+    financial_summary: AdminUserFinancialSummary
+    recent_logs: list[AdminLogRow]
+    recent_insights: list[AdminInsightOut]
 
 
 class AdminInsightsResponse(AdminPaginationMeta):
