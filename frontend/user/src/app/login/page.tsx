@@ -34,7 +34,6 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-lg">
         <h1 className="mb-1 text-2xl font-bold text-ink">Welcome back</h1>
-        <p className="mb-6 text-sm text-slate-500">Sign in to BizMoneyAI</p>
         {error && (
           <p className="mb-4 rounded bg-red-100 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
