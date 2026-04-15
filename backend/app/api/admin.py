@@ -46,6 +46,8 @@ from app.schemas.admin_panel import (
     AdminTransactionSummary,
     AdminTransactionOut,
     AdminTransactionTrend,
+    AdminUserFinancialSummary,
+    AdminUserOverview,
     AdminUserRow,
     AdminUserSummary,
     AdminUsersResponse,

@@ -22,6 +22,7 @@ import {
 import AdminMetricCard from "@/components/AdminMetricCard";
 import AdminPanel from "@/components/AdminPanel";
 import AdminShell from "@/components/AdminShell";
+import AdminUserOverviewPanel from "@/components/AdminUserOverviewPanel";
 import AdminUserSelector from "@/components/AdminUserSelector";
 import api from "@/lib/api";
 import { getErrorMessage, getStatusCode } from "@/lib/errors";
@@ -33,6 +34,7 @@ import {
   AdminAnalyticsTransactions,
   AdminAnalyticsUsers,
   AdminDashboard,
+  AdminUserOverview,
   AdminUsersResponse,
 } from "@/lib/types";
 
@@ -41,13 +43,16 @@ const PIE_COLORS = ["#0f172a", "#14b8a6", "#38bdf8", "#f97316", "#ef4444", "#8b5
 export default function AdminDashboardPage() {
   const [data, setData] = useState<AdminDashboard | null>(null);
   const [users, setUsers] = useState<AdminUsersResponse["users"]>([]);
+  const [userOverview, setUserOverview] = useState<AdminUserOverview | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [usersError, setUsersError] = useState("");
+  const [overviewError, setOverviewError] = useState("");
   const [loading, setLoading] = useState(true);
   const [usersLoading, setUsersLoading] = useState(true);
+  const [overviewLoading, setOverviewLoading] = useState(false);
 
-  const selectedUser = users.find((user) => user.user_id === selectedUserId) ?? null;
+  const selectedUser = userOverview?.user ?? users.find((user) => user.user_id === selectedUserId) ?? null;
   const isInitialLoading = loading && !data;
   const isRefreshing = loading && !!data;
 
@@ -60,6 +65,11 @@ export default function AdminDashboardPage() {
       });
       setUsers(response.data.users);
       setUsersError("");
+      if (selectedUserId !== null && !response.data.users.some((user) => user.user_id === selectedUserId)) {
+        setSelectedUserId(null);
+        setUserOverview(null);
+        setOverviewError("The selected user is no longer available. Returned to global mode.");
+      }
     } catch (err: unknown) {
       if (axios.isCancel(err)) {
         return;
@@ -72,7 +82,7 @@ export default function AdminDashboardPage() {
         setUsersLoading(false);
       }
     }
-  }, []);
+  }, [selectedUserId]);
 
   const loadDashboard = useCallback(async (userId: number | null, signal?: AbortSignal) => {
     setLoading(true);
@@ -100,6 +110,11 @@ export default function AdminDashboardPage() {
         return;
       }
       if (getStatusCode(err) !== 401 && getStatusCode(err) !== 403) {
+        if (getStatusCode(err) === 404 && userId !== null) {
+          setSelectedUserId(null);
+          setUserOverview(null);
+          setOverviewError("The selected user could not be found. Returned to global mode.");
+        }
         setError(getErrorMessage(err, "Failed to load the admin dashboard."));
       }
     } finally {
@@ -109,13 +124,46 @@ export default function AdminDashboardPage() {
     }
   }, []);
 
+  const loadUserOverview = useCallback(async (userId: number | null, signal?: AbortSignal) => {
+    if (userId === null) {
+      setUserOverview(null);
+      setOverviewError("");
+      setOverviewLoading(false);
+      return;
+    }
+
+    setOverviewLoading(true);
+    try {
+      const response = await api.get<AdminUserOverview>(`/admin/users/${userId}/overview`, { signal });
+      setUserOverview(response.data);
+      setOverviewError("");
+    } catch (err: unknown) {
+      if (axios.isCancel(err)) {
+        return;
+      }
+      if (getStatusCode(err) === 404) {
+        setSelectedUserId(null);
+        setUserOverview(null);
+        setOverviewError("The selected user was deleted or is no longer available. Returned to global mode.");
+      } else if (getStatusCode(err) !== 401 && getStatusCode(err) !== 403) {
+        setOverviewError(getErrorMessage(err, "Failed to load the selected user overview."));
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setOverviewLoading(false);
+      }
+    }
+  }, []);
+
   const refreshDashboard = useCallback(async () => {
-    await Promise.all([loadUsers(), loadDashboard(selectedUserId)]);
-  }, [loadDashboard, loadUsers, selectedUserId]);
+    await Promise.all([loadUsers(), loadDashboard(selectedUserId), loadUserOverview(selectedUserId)]);
+  }, [loadDashboard, loadUserOverview, loadUsers, selectedUserId]);
 
   const handleScopeChange = useCallback((userId: number | null) => {
     setSelectedUserId(userId);
     setError("");
+    setOverviewError("");
+    setUserOverview(null);
     setLoading(true);
   }, []);
 
@@ -131,19 +179,16 @@ export default function AdminDashboardPage() {
     return () => controller.abort();
   }, [loadDashboard, selectedUserId]);
 
-  const totalTransactionVolume = data?.transaction_trends.reduce((sum, item) => sum + item.total_amount, 0) ?? 0;
-  const totalRecentEvents = data?.activity_trends.reduce((sum, item) => sum + item.total_events, 0) ?? 0;
-  const scopeDescription = selectedUser
-    ? `Viewing analytics only for ${selectedUser.name}. Every summary, chart, insight, budget signal, and recent log below is scoped to that user.`
-    : "Track overall platform health, financial activity, AI output, and recent operational events from one place.";
-  const scopeSummary = selectedUser
-    ? `${selectedUser.name} (${selectedUser.email}) is selected.`
-    : "No user is selected, so the dashboard is showing the current global aggregated analytics.";
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadUserOverview(selectedUserId, controller.signal);
+    return () => controller.abort();
+  }, [loadUserOverview, selectedUserId]);
 
+  const totalTransactionVolume = data?.transaction_trends.reduce((sum, item) => sum + item.total_amount, 0) ?? 0;
   return (
     <AdminShell
       title="Monitoring Dashboard"
-      description={scopeDescription}
       actions={
         <button onClick={() => void refreshDashboard()} className="bg-white px-4 py-2 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">
           Refresh
@@ -153,25 +198,27 @@ export default function AdminDashboardPage() {
       <div className="space-y-6">
         {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-        <AdminPanel title="Analytics Scope">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,380px)_1fr]">
+        <AdminPanel title="User Management Context">
+          <div className="space-y-5">
             <AdminUserSelector
               users={users}
               value={selectedUserId}
               onChange={handleScopeChange}
               disabled={usersLoading && users.length === 0}
-              loading={loading || usersLoading}
+              loading={loading || usersLoading || overviewLoading}
             />
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Current View</p>
-              <p className="mt-2 text-sm font-medium text-slate-900">{scopeSummary}</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Switching the selector keeps the existing global behavior when no user is chosen and applies a single-user scope everywhere else.
-              </p>
-              {isRefreshing && <p className="mt-3 text-sm font-medium text-teal-700">Updating analytics for the selected scope...</p>}
-              {usersError && <p className="mt-3 text-sm text-amber-700">{usersError}</p>}
-            </div>
+            {isRefreshing && <p className="text-sm font-medium text-teal-700">Updating analytics...</p>}
+            {usersError && <p className="text-sm text-amber-700">{usersError}</p>}
+            {selectedUserId === null && overviewError && <p className="text-sm text-amber-700">{overviewError}</p>}
+
+            {selectedUserId !== null && (
+              <AdminUserOverviewPanel
+                overview={userOverview}
+                loading={overviewLoading}
+                error={overviewError}
+              />
+            )}
           </div>
         </AdminPanel>
 
@@ -215,7 +262,6 @@ export default function AdminDashboardPage() {
               <AdminMetricCard
                 label="Overspending"
                 value={formatCurrency(data.total_overspending_amount)}
-                helper={`${formatCompactNumber(totalRecentEvents)} ${selectedUser ? "scoped" : "recent"} events`}
                 tone="danger"
               />
             </div>
