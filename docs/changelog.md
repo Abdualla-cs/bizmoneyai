@@ -1,5 +1,53 @@
 # BizMoneyAI Engineering Changelog
 
+[2026-04-15 14:14]
+
+Added a visible selected-user management experience to the admin dashboard.
+
+WHY:
+Admins needed a real SaaS-style way to inspect one user at a time instead of relying on hidden filters or weak table context.
+
+PROBLEM:
+The admin dashboard could pass `user_id` to analytics endpoints, but the UI did not provide a clear always-visible user selection surface or a focused account overview with financial, activity, and insight details.
+
+SOLUTION:
+- Replaced the hidden-style user selector with visible selectable user bubbles/cards and an `All Users` global mode control.
+- Added selected-user dashboard state that sends `user_id` to the dashboard analytics requests.
+- Added `GET /admin/users/{user_id}/overview` for user basic info, counts, financial summary, recent logs, and recent insights.
+- Added a selected-user overview panel that shows status, created date, last activity, account stats, income, expense, balance, over-budget count, recent activity, and recent insights.
+- Kept the dashboard global mode intact when no user is selected.
+
+ISSUES:
+- The selected user can disappear after deletion or refresh, so the dashboard now clears back to global mode when the user is no longer available.
+- The existing analytics endpoints already supported `user_id`, so the backend change stayed focused on the richer user overview payload.
+
+HOW IT WAS SOLVED:
+Added a minimal typed overview endpoint, reused existing analytics endpoints for chart scoping, and verified both scoped/global backend behavior plus the admin frontend build.
+
+[2026-04-15 14:03]
+
+Fixed admin list sorting for the user and category management views.
+
+WHY:
+The admin frontend requests user and category option lists sorted by name, and those requests need to work without relaxing the API into arbitrary sort fields.
+
+PROBLEM:
+Admin users and categories sorting was not backed by an explicit safe column contract, and the backend pagination cap rejected the frontend's `limit=500` option-list requests before the admin pages could load consistently.
+
+SOLUTION:
+- Added explicit allowed sort maps for admin users and categories.
+- Mapped model-backed sorts such as `name`, `email`, and `created_at` to SQLAlchemy columns or expressions.
+- Kept derived metric sorts working through validated in-memory row sort helpers.
+- Raised the users/categories admin list limit cap to 500 for existing frontend option loaders.
+- Added focused regression coverage for user and category sorting plus invalid sort validation.
+
+ISSUES:
+- Invalid `sort_by` values must still fail with a validation-style `422` instead of being passed through to a query.
+- The frontend did not need a contract change because it was already sending supported sort keys.
+
+HOW IT WAS SOLVED:
+Validated `sort_by` before applying pagination, used safe lookup maps instead of arbitrary attribute access, and covered the exact `limit=500&sort_by=name` request shape used by the admin UI.
+
 [2026-04-14 02:45]
 
 Added the engineering documentation baseline and standardized the `docs` folder around change history, architecture, admin operations, ML status, design decisions, and known issues.
