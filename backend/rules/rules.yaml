@@ -1,14 +1,149 @@
-rules:
-  - id: expense-ratio-warning
-    type: expense_ratio_gt
-    threshold: 0.8
-    title: "High spending detected"
-    message: "Expenses are above 80% of income in the selected period."
-    severity: warning
+version: 1
 
-  - id: high-single-expense-critical
-    type: high_single_expense
-    threshold: 1000
-    title: "Large expense detected"
-    message: "At least one expense exceeded 1000."
-    severity: critical
+defaults:
+  enabled: true
+  currency: USD
+  min_income_for_ratio_rules: 0.0
+
+rules:
+  - id: zero_income_with_expense
+    type: zero_income_with_expense
+    enabled: true
+    scope: period
+    severity_thresholds:
+      critical: 0
+    titles:
+      critical: "Expenses detected without income"
+    message_template: "You recorded {total_expense_amount} in expenses during the selected period but no income."
+
+  - id: expense_ratio
+    type: expense_ratio
+    enabled: true
+    scope: period
+    severity_thresholds:
+      info: 0.70
+      warning: 0.85
+      critical: 1.00
+    titles:
+      info: "Expense ratio is getting high"
+      warning: "High expense ratio detected"
+      critical: "Expenses exceeded income"
+    message_template: "Your expenses reached {expense_ratio_pct} of income during the selected period."
+
+  - id: profit_drop_percent
+    type: profit_drop_percent
+    enabled: true
+    scope: period
+    severity_thresholds:
+      info: 10
+      warning: 20
+      critical: 35
+    titles:
+      info: "Profit declined"
+      warning: "Significant profit drop detected"
+      critical: "Critical profit drop detected"
+    message_template: "Your profit dropped by {profit_drop_pct} compared with the previous period."
+
+  - id: spending_spike_percent
+    type: spending_spike_percent
+    enabled: true
+    scope: period
+    severity_thresholds:
+      info: 15
+      warning: 30
+      critical: 50
+    titles:
+      info: "Spending increased"
+      warning: "Spending spike detected"
+      critical: "Critical spending spike detected"
+    message_template: "Your spending increased by {spending_spike_pct} compared with the previous period."
+
+  - id: negative_balance
+    type: negative_balance
+    enabled: true
+    scope: period
+    severity_thresholds:
+      warning: 0
+    titles:
+      warning: "Negative balance detected"
+    message_template: "Your balance for the selected period is negative at {balance_amount}."
+
+  - id: negative_balance_below
+    type: negative_balance_below
+    enabled: true
+    scope: period
+    severity_thresholds:
+      critical: -500
+    titles:
+      critical: "Severe negative balance detected"
+    message_template: "Your balance for the selected period dropped to {balance_amount}."
+
+  - id: budget_overspend_ratio
+    type: budget_overspend_ratio
+    enabled: true
+    scope: category_period
+    severity_thresholds:
+      info: 0.90
+      warning: 1.00
+      critical: 1.20
+    titles:
+      info: "Budget is nearly exhausted"
+      warning: "Budget exceeded"
+      critical: "Severe budget overspending detected"
+    message_template: "{category_name} reached {budget_usage_pct} of its budget in {budget_month_label}."
+
+  - id: category_income_ratio
+    type: category_income_ratio
+    enabled: true
+    scope: category_period
+    severity_thresholds:
+      info: 0.25
+      warning: 0.40
+      critical: 0.55
+    titles:
+      info: "Category spend is rising against income"
+      warning: "Category spend is consuming too much income"
+      critical: "Category spend is critically high versus income"
+    message_template: "{category_name} spending reached {category_income_ratio_pct} of income during the selected period."
+
+  - id: income_drop_percent
+    type: income_drop_percent
+    enabled: true
+    scope: period
+    severity_thresholds:
+      info: 10
+      warning: 20
+      critical: 30
+    titles:
+      info: "Income declined"
+      warning: "Income dropped"
+      critical: "Critical income drop detected"
+    message_template: "Your income dropped by {income_drop_pct} compared with the previous period."
+
+  - id: missing_budget_high_spend
+    type: missing_budget_high_spend
+    enabled: true
+    scope: category_period
+    severity_thresholds:
+      info: 500
+      warning: 1000
+      critical: 2000
+    titles:
+      info: "High-spend category has no budget"
+      warning: "Very active category has no budget"
+      critical: "Critical spend is happening without a budget"
+    message_template: "{category_name} recorded {category_spend_amount} in spending in {budget_month_label} but has no budget set for that month."
+
+  - id: consecutive_budget_overspend
+    type: consecutive_budget_overspend
+    enabled: true
+    scope: category_period
+    severity_thresholds:
+      info: 2
+      warning: 3
+      critical: 4
+    titles:
+      info: "Budget overspending is repeating"
+      warning: "Repeated budget overspending detected"
+      critical: "Chronic budget overspending detected"
+    message_template: "{category_name} has exceeded its budget for {consecutive_overspend_count} consecutive periods through {budget_month_label}."
