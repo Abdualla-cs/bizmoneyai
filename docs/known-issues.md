@@ -1,11 +1,11 @@
 # BizMoneyAI Known Issues
 
-## 1. Category prediction profiles require explicit retraining
+## 1. AI verification still leaves non-blocking framework deprecation warnings
 
-- Persisted category profiles are refreshed only when `POST /ml/train-category-model` or the training script runs.
-- The current user frontend calls prediction but does not automatically trigger retraining after category or transaction changes.
-- Impact: predictions can become stale or fall back to weaker category-name-only matching.
-- Expected follow-up: retrain automatically after relevant write operations or schedule retraining jobs.
+- The isolated AI verification suite passes, but the backend still emits Pydantic v2 `Config` deprecation warnings and `datetime.utcnow()` deprecation warnings during test runs.
+- Files affected include `backend/app/schemas/*.py` and model defaults still using `datetime.utcnow`.
+- Impact: the AI insight engine works as expected, but these warnings should be cleaned up before a longer production hardening pass.
+- Expected follow-up: migrate schema configs to `ConfigDict` and standardize UTC-aware timestamp defaults.
 
 ## 2. ML fallback mode favors uptime over quality
 
@@ -18,7 +18,7 @@
 
 - The sentence-transformer model is loaded lazily on first use and then cached in-process.
 - File affected: `backend/app/services/embeddings.py`.
-- Impact: the first ML training or prediction request in a fresh process can take noticeably longer than steady-state requests.
+- Impact: the first ML prediction request in a fresh process can take noticeably longer than steady-state requests.
 - Expected follow-up: add an optional warmup path only if that latency becomes user-facing enough to justify the extra startup work.
 
 ## 4. Legacy mixed-case auth data may still need cleanup during rollout

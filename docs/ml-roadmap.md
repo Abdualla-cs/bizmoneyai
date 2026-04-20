@@ -4,23 +4,36 @@
 
 ### Rule-based financial insights
 
-- Endpoint: `POST /ai/generate`
+- Endpoints: `POST /ai/generate`, `GET /ai/insights`, and `GET /ai/insights/timeseries`
 - Source of truth: `backend/rules/rules.yaml`
-- Current rule types include expense ratio, negative balance, high single expense, low transaction count, income drop, expense spike, and category spike detection.
-- Output is persisted as `AIInsight` records so the system can review historical insight generation later.
+- Runtime implementation: `backend/app/services/insights/`
+- Current phase-1 rule ids are:
+  - `zero_income_with_expense`
+  - `expense_ratio`
+  - `profit_drop_percent`
+  - `spending_spike_percent`
+  - `negative_balance`
+  - `negative_balance_below`
+  - `budget_overspend_ratio`
+  - `category_income_ratio`
+  - `income_drop_percent`
+  - `missing_budget_high_spend`
+  - `consecutive_budget_overspend`
+- Output is persisted as `AIInsight` records with `rule_id` and `metadata_json` so the system can audit historical insight generation later.
+- Duplicate insight inserts are prevented per user, rule, period, and `scope_key`.
 
 ### Category suggestion
 
-- Endpoints: `POST /ml/train-category-model` and `POST /ml/predict-category`
+- Endpoint: `POST /ml/predict-category`
 - Model approach: sentence-transformer embeddings with cosine similarity matching.
-- Per-user profiles are stored under `backend/artifacts/ml/user_<id>/`.
-- Training uses the category name, category type, and up to the latest 20 transaction descriptions per category.
+- The current API compares the request text against the authenticated user's live category list. There is no persisted training endpoint in the current runtime API.
 
 ## Datasets in Use
 
 - User-owned categories.
-- User transaction descriptions grouped by category.
-- Transaction windows used by the rules engine for current-period versus previous-period comparison.
+- User transactions for current-period versus previous-period comparisons.
+- User budgets for category-month budget monitoring and overspending streaks.
+- Persisted `ai_insights` rows for historical review.
 - YAML rule configuration maintained in `backend/rules/rules.yaml`.
 
 There is no separate centralized training dataset yet. The current ML behavior is built from each user's own financial records.
@@ -31,9 +44,9 @@ There is no separate centralized training dataset yet. The current ML behavior i
 
 Chosen because it is lightweight, runs locally, works well with short merchant-style text, and avoids introducing an external hosted inference dependency for basic category prediction.
 
-### Profile matching instead of supervised classification
+### Direct category embedding comparison instead of supervised classification
 
-Chosen because the system currently has sparse, user-specific data and category lists that can change often. Averaged category profiles are simpler to maintain than a global classifier and are easier to rebuild per user.
+Chosen because the system currently has sparse, user-specific data and category lists that can change often. Live category matching is simple to operate, transparent to debug, and does not require a separate training lifecycle.
 
 ### YAML rules for financial insights
 
@@ -41,8 +54,6 @@ Chosen because operational finance alerts need to stay transparent and easy to t
 
 ## Planned Next Steps
 
-- Add automatic profile retraining after category or transaction changes so predictions do not depend on a manual training call.
-- Store model version metadata with each trained artifact so future migrations are easier.
 - Add an evaluation harness for category prediction quality before introducing more complex models.
 - Add confidence gating and abstain behavior for low-signal descriptions.
 - Capture user correction feedback so category suggestions can improve from accepted versus rejected predictions.
@@ -52,6 +63,5 @@ Chosen because operational finance alerts need to stay transparent and easy to t
 ## Current Constraints
 
 - If the sentence-transformers model is unavailable, the service falls back to deterministic random vectors to keep the API online. This preserves availability but not semantic quality.
-- Persisted profiles are only as fresh as the last training run.
 - The current approach is optimized for small, user-level datasets, not large shared-model training.
 - The embedding model is loaded lazily on first use. `backend/app/services/embeddings.py` already caches the model in-process after that first load, but a fresh process still pays the initial warm-start cost.
