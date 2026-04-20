@@ -141,7 +141,6 @@ export default function AdminUsersPage() {
   return (
     <AdminShell
       title="User Monitoring"
-      description="Review user activity, search accounts quickly, suspend access when needed, and remove accounts when moderation or support requires it."
       actions={
         <button onClick={() => void table.refetch()} className="bg-white px-4 py-2 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">
           Refresh
@@ -157,7 +156,7 @@ export default function AdminUsersPage() {
           <AdminMetricCard label="Inactive" value={formatCompactNumber(usersSummary?.inactive_count ?? 0)} helper="Blocked from user auth" tone="warning" />
         </div>
 
-        <AdminPanel title="Manage Users" description="Search by name or email, review activity metrics, and control account access.">
+        <AdminPanel title="Manage Users">
           <DataTable
             columns={columns}
             rows={table.rows}

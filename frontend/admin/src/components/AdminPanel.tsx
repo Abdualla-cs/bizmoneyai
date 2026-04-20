@@ -7,7 +7,6 @@ type AdminPanelProps = {
 
 export default function AdminPanel({
   title,
-  description,
   actions,
   children,
 }: AdminPanelProps) {
@@ -16,7 +15,6 @@ export default function AdminPanel({
       <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>

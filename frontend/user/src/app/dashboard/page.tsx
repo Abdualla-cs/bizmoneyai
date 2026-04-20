@@ -98,9 +98,7 @@ export default function DashboardPage() {
               <div className="rounded-lg bg-white/80 p-3 shadow-sm">
                 <p className="text-xs uppercase tracking-wide text-slate-400">Top Expense Category</p>
                 <p className="mt-1 text-lg font-semibold text-ink">{summary?.top_expense_category_name ?? "None yet"}</p>
-                <p className="text-xs text-slate-500">
-                  {summary?.top_expense_category_name ? `$${fmt(summary?.top_expense_category_total ?? 0)}` : "Add expenses to see trends"}
-                </p>
+                {summary?.top_expense_category_name && <p className="text-xs text-slate-500">${fmt(summary?.top_expense_category_total ?? 0)}</p>}
               </div>
             </div>
           </div>
@@ -145,13 +143,9 @@ export default function DashboardPage() {
               </p>
             </div>
           </div>
-          <p className="mt-4 text-sm text-slate-600">
-            {summary?.budget_total
-              ? summary.over_budget_count > 0
-                ? `${summary.over_budget_count} budget category is currently over plan.`
-                : "All tracked budget categories are currently within plan."
-              : "No budgets set for this month yet. Add budgets to track spending limits."}
-          </p>
+          {!!summary?.budget_total && summary.over_budget_count > 0 && (
+            <p className="mt-4 text-sm text-slate-600">{summary.over_budget_count} budget category is currently over plan.</p>
+          )}
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">

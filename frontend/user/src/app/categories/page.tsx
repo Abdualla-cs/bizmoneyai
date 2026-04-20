@@ -117,7 +117,7 @@ export default function CategoriesPage() {
         </div>
         <div className="overflow-hidden rounded-xl bg-white shadow">
           {cats.length === 0 ? (
-            <p className="p-8 text-center text-sm text-slate-400">No categories yet. Add one above.</p>
+            <p className="p-8 text-center text-sm text-slate-400">No categories yet.</p>
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">

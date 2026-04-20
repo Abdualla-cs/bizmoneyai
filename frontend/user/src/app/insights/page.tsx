@@ -123,11 +123,6 @@ export default function InsightsPage() {
         {filteredInsights.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center">
             <p className="text-lg text-slate-400">{insights.length === 0 ? "No insights yet." : "No insights match this filter."}</p>
-            <p className="mt-2 text-sm text-slate-400">
-              {insights.length === 0
-                ? "Choose a date range and click Generate Insights to analyze your recent transactions."
-                : "Try another severity filter or generate a different analysis period."}
-            </p>
           </div>
         ) : (
           <div className="space-y-4">
