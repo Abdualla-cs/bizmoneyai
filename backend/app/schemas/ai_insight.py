@@ -16,3 +16,16 @@ class AIInsightOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AIInsightGenerateRequest(BaseModel):
+    period_start: date | None = None
+    period_end: date | None = None
+
+
+class AIInsightTimeSeriesPoint(BaseModel):
+    bucket: date
+    insights_count: int
+    info_count: int
+    warning_count: int
+    critical_count: int
