@@ -231,7 +231,7 @@ export default function AdminDashboardPage() {
           </div>
         ) : (
           <div className={`space-y-6 transition-opacity ${isRefreshing ? "opacity-80" : "opacity-100"}`}>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
               <AdminMetricCard
                 label={selectedUser ? "Scoped User" : "Total Users"}
                 value={formatCompactNumber(data.total_users)}
@@ -254,6 +254,11 @@ export default function AdminDashboardPage() {
                 helper={selectedUser ? "Persisted insights for the selected user" : "Persisted generated insights"}
               />
               <AdminMetricCard
+                label="Unusual Tx"
+                value={formatCompactNumber(data.total_unusual_transactions)}
+                tone={data.unusual_critical_count > 0 ? "danger" : data.unusual_warning_count > 0 ? "warning" : "default"}
+              />
+              <AdminMetricCard
                 label="Over Budget"
                 value={formatCompactNumber(data.over_budget_categories)}
                 helper={selectedUser ? "Budget rows above limit for this user" : "Budget rows above limit"}
@@ -265,6 +270,65 @@ export default function AdminDashboardPage() {
                 tone="danger"
               />
             </div>
+
+            <AdminPanel
+              title="Unusual Transaction Monitoring"
+              description={
+                selectedUser
+                  ? "Recent Model 2 warnings created for the selected user's transactions."
+                  : "Recent Model 2 warnings created from transaction creation events."
+              }
+            >
+              <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                  <div className="rounded-xl bg-amber-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Warnings</p>
+                    <p className="mt-1 text-2xl font-semibold text-amber-800">{formatCompactNumber(data.unusual_warning_count)}</p>
+                  </div>
+                  <div className="rounded-xl bg-rose-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-700">Critical</p>
+                    <p className="mt-1 text-2xl font-semibold text-rose-800">{formatCompactNumber(data.unusual_critical_count)}</p>
+                  </div>
+                </div>
+                {data.recent_unusual_transaction_insights.length > 0 ? (
+                  <div className="space-y-3">
+                    {data.recent_unusual_transaction_insights.map((insight) => (
+                      <div key={insight.insight_id} className="rounded-xl bg-slate-50 px-4 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-slate-900">{insight.title}</p>
+                            <p className="text-sm text-slate-500">{insight.message}</p>
+                            <p className="mt-1 text-xs text-slate-400">
+                              {insight.user_name} | {formatDateTime(insight.created_at)}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                insight.severity === "critical"
+                                  ? "bg-rose-100 text-rose-700"
+                                  : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {insight.severity}
+                            </span>
+                            {insight.fraud_probability !== null && (
+                              <p className="mt-2 text-xs text-slate-500">
+                                {(insight.fraud_probability * 100).toFixed(1)}% probability
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">
+                    {selectedUser ? "No unusual transaction insights for this user yet." : "No unusual transaction insights have been recorded yet."}
+                  </p>
+                )}
+              </div>
+            </AdminPanel>
 
             <div className="grid gap-6 xl:grid-cols-2">
               <AdminPanel

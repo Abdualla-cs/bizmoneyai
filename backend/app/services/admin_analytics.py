@@ -29,10 +29,12 @@ from app.schemas.admin_panel import (
     AdminOverspendingCategory,
     AdminSpendDistributionItem,
     AdminTransactionTrend,
+    AdminUnusualTransactionInsight,
 )
 from app.services.budget_metrics import budget_status
 
 CACHE_TTL_SECONDS = 30
+UNUSUAL_TRANSACTION_RULE_ID = "ml_unusual_transaction"
 
 _T = TypeVar("_T")
 _analytics_cache: dict[tuple[str, int | None, int | None], tuple[float, object]] = {}
@@ -120,6 +122,61 @@ def _logs_query(db: Session):
         .outerjoin(Admin, Admin.admin_id == SystemLog.admin_id)
         .outerjoin(User, User.user_id == SystemLog.user_id)
     )
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _serialize_unusual_transaction_insights(rows) -> list[AdminUnusualTransactionInsight]:
+    serialized: list[AdminUnusualTransactionInsight] = []
+    for insight, user_name, user_email in rows:
+        metadata = insight.metadata_json or {}
+        serialized.append(
+            AdminUnusualTransactionInsight(
+                insight_id=insight.insight_id,
+                user_id=insight.user_id,
+                user_name=user_name,
+                user_email=user_email,
+                title=insight.title,
+                message=insight.message,
+                severity=insight.severity,
+                period_start=insight.period_start,
+                period_end=insight.period_end,
+                created_at=insight.created_at,
+                transaction_id=_optional_int(metadata.get("transaction_id")),
+                fraud_probability=_optional_float(metadata.get("fraud_probability")),
+            )
+        )
+    return serialized
+
+
+def _unusual_transaction_insights_query(db: Session, user_id: int | None = None):
+    query = (
+        db.query(AIInsight, User.name, User.email)
+        .join(User, User.user_id == AIInsight.user_id)
+        .filter(
+            AIInsight.rule_id == UNUSUAL_TRANSACTION_RULE_ID,
+            AIInsight.severity.in_(["warning", "critical"]),
+        )
+    )
+    if user_id is not None:
+        query = query.filter(AIInsight.user_id == user_id)
+    return query
 
 
 def _count_records(db: Session, model, id_column, user_id: int | None = None) -> int:
@@ -369,6 +426,27 @@ def get_admin_analytics_insights(
         if user_id is not None:
             severity_query = severity_query.filter(AIInsight.user_id == user_id)
 
+        unusual_summary_query = (
+            db.query(AIInsight.severity, func.count(AIInsight.insight_id))
+            .filter(
+                AIInsight.rule_id == UNUSUAL_TRANSACTION_RULE_ID,
+                AIInsight.severity.in_(["warning", "critical"]),
+            )
+        )
+        if user_id is not None:
+            unusual_summary_query = unusual_summary_query.filter(AIInsight.user_id == user_id)
+
+        unusual_counts = {
+            severity: int(count or 0)
+            for severity, count in unusual_summary_query.group_by(AIInsight.severity).all()
+        }
+        recent_unusual_transaction_insights = _serialize_unusual_transaction_insights(
+            _unusual_transaction_insights_query(db, user_id=user_id)
+            .order_by(AIInsight.created_at.desc(), AIInsight.insight_id.desc())
+            .limit(5)
+            .all()
+        )
+
         return AdminAnalyticsInsightsOut(
             insight_severity_distribution=[
                 AdminCountByLabel(label=label, count=int(count or 0))
@@ -378,7 +456,11 @@ def get_admin_analytics_insights(
                     .order_by(func.count(AIInsight.insight_id).desc(), AIInsight.severity.asc())
                     .all()
                 )
-            ]
+            ],
+            total_unusual_transactions=sum(unusual_counts.values()),
+            unusual_warning_count=unusual_counts.get("warning", 0),
+            unusual_critical_count=unusual_counts.get("critical", 0),
+            recent_unusual_transaction_insights=recent_unusual_transaction_insights,
         )
 
     return _with_ttl_cache("insights", user_id=user_id, days=None, builder=builder)

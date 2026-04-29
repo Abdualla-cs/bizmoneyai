@@ -10,6 +10,7 @@ import api from "@/lib/api";
 type Cat = { category_id: number; name: string; type: string };
 type Tx = { transaction_id: number; category_id: number; amount: number; type: "income" | "expense"; description: string | null; date: string };
 type Sug = { suggested_category_id: number | null; suggested_category_name: string | null; confidence: number };
+type UnusualDetection = { is_unusual: boolean; fraud_probability: number; risk_level: "normal" | "warning" | "critical"; model_name: string | null };
 type FormState = { category_id: string; amount: string; type: "income" | "expense"; description: string; date: string };
 type ImportResult = { imported_count: number; skipped_count: number; rejected_rows: { row_number: number; reason: string }[]; transactions: Tx[] };
 
@@ -28,6 +29,7 @@ export default function TransactionsPage() {
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editId, setEditId] = useState<number | null>(null);
   const [sug, setSug] = useState<Sug | null>(null);
+  const [unusualDetection, setUnusualDetection] = useState<UnusualDetection | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -71,6 +73,19 @@ export default function TransactionsPage() {
     tmrRef.current = setTimeout(() => predict(value), 600);
   };
 
+  const detectUnusualTransaction = async (body: { amount: number; type: "income" | "expense" }) => {
+    try {
+      const response = await api.post<UnusualDetection>("/ml/detect-unusual-transaction", {
+        amount: body.amount,
+        transaction_type: body.type === "income" ? "CASH_IN" : "CASH_OUT",
+        step: 0,
+      });
+      setUnusualDetection(response.data.is_unusual ? response.data : null);
+    } catch {
+      setUnusualDetection(null);
+    }
+  };
+
   const startEdit = (tx: Tx) => {
     setEditId(tx.transaction_id);
     setForm({
@@ -81,12 +96,14 @@ export default function TransactionsPage() {
       date: tx.date,
     });
     setSug(null);
+    setUnusualDetection(null);
   };
 
   const cancel = () => {
     setEditId(null);
     setForm(EMPTY);
     setSug(null);
+    setUnusualDetection(null);
     setError("");
   };
 
@@ -97,6 +114,7 @@ export default function TransactionsPage() {
     }
     setError("");
     setNotice("");
+    setUnusualDetection(null);
     setBusy(true);
     const body = {
       category_id: Number(form.category_id),
@@ -110,6 +128,7 @@ export default function TransactionsPage() {
         await api.put(`/transactions/${editId}`, body);
       } else {
         await api.post("/transactions", body);
+        void detectUnusualTransaction(body);
       }
       setForm(EMPTY);
       setEditId(null);
@@ -203,6 +222,22 @@ export default function TransactionsPage() {
         <h1 className="text-3xl font-bold text-ink">Transactions</h1>
         {error && <div className="rounded bg-red-100 px-4 py-2 text-sm text-red-700">{error}</div>}
         {notice && <div className="rounded bg-green-100 px-4 py-2 text-sm text-green-700">{notice}</div>}
+        {unusualDetection && (
+          <div
+            className={`rounded px-4 py-2 text-sm ${
+              unusualDetection.risk_level === "critical"
+                ? "bg-red-100 text-red-700"
+                : "bg-yellow-100 text-yellow-800"
+            }`}
+          >
+            {unusualDetection.risk_level === "critical"
+              ? "Critical unusual transaction detected. Review this transaction immediately."
+              : "Unusual transaction detected. This transaction appears higher risk than normal."}
+            <span className="ml-2 font-medium">
+              {Math.round(unusualDetection.fraud_probability * 100)}% risk
+            </span>
+          </div>
+        )}
 
         <div className="rounded-xl bg-white p-6 shadow">
           <h2 className="mb-4 font-semibold">{editId !== null ? "Edit Transaction" : "Add New Transaction"}</h2>

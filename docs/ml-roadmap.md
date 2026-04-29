@@ -25,28 +25,44 @@
 ### Category suggestion
 
 - Endpoint: `POST /ml/predict-category`
-- Model approach: sentence-transformer embeddings with cosine similarity matching.
-- The current API compares the request text against the authenticated user's live category list. There is no persisted training endpoint in the current runtime API.
+- Primary model approach: a local scikit-learn Pipeline saved at `backend/app/ml/models/classifier.joblib`.
+- Pipeline: `TfidfVectorizer(ngram_range=(1, 2), max_features=5000)` plus `LogisticRegression(max_iter=2000)`.
+- Runtime behavior: the classifier predicts a canonical category name from the transaction description, then the API returns the matching user category only after normalized or fuzzy matching.
+- Matching normalizes lowercase text, trims spaces, treats `&` as `and`, collapses repeated spaces, prefers exact normalized matches, and then uses `difflib.get_close_matches`.
+- The classifier has a minimum confidence threshold of `0.50`. Predictions below that threshold are ignored.
+- Fallback behavior: if the model is missing, incompatible, fails, has low confidence, or predicts a category the user does not have, the API falls back to sentence-transformer embedding similarity against the user's live categories.
+- There is no persisted training endpoint in the runtime API. Training is a developer command.
 
 ## Datasets in Use
 
 - User-owned categories.
+- Synthetic classifier training data in `backend/app/ml/training/training_data.csv`.
 - User transactions for current-period versus previous-period comparisons.
 - User budgets for category-month budget monitoring and overspending streaks.
 - Persisted `ai_insights` rows for historical review.
 - YAML rule configuration maintained in `backend/rules/rules.yaml`.
 
-There is no separate centralized training dataset yet. The current ML behavior is built from each user's own financial records.
+The supervised classifier uses the checked-in synthetic training CSV. Runtime suggestions still respect each user's own category list. A perfect synthetic split score is not evidence of real-world accuracy.
 
 ## Model Choices and Reasoning
 
-### `all-MiniLM-L6-v2` for embeddings
+### TF-IDF plus Logistic Regression for category prediction
 
-Chosen because it is lightweight, runs locally, works well with short merchant-style text, and avoids introducing an external hosted inference dependency for basic category prediction.
+Chosen because transaction descriptions are short merchant-style strings and the category set is small. The model is lightweight, local, easy to retrain, and keeps the `/ml/predict-category` contract simple.
 
-### Direct category embedding comparison instead of supervised classification
+### `all-MiniLM-L6-v2` for fallback embeddings
 
-Chosen because the system currently has sparse, user-specific data and category lists that can change often. Live category matching is simple to operate, transparent to debug, and does not require a separate training lifecycle.
+Kept as a fallback because it can still choose among a user's custom categories when the supervised classifier has no exact category-name match.
+
+## Developer Commands
+
+Run from `backend/`:
+
+```bash
+python -m app.ml.training.generate_data
+python -m app.ml.training.train_model
+python -c "from app.services.category_classifier import classifier; print(classifier.is_ready())"
+```
 
 ### YAML rules for financial insights
 
@@ -54,14 +70,15 @@ Chosen because operational finance alerts need to stay transparent and easy to t
 
 ## Planned Next Steps
 
-- Add an evaluation harness for category prediction quality before introducing more complex models.
-- Add confidence gating and abstain behavior for low-signal descriptions.
+- Add an evaluation harness for category prediction quality beyond the training split report.
 - Capture user correction feedback so category suggestions can improve from accepted versus rejected predictions.
-- Explore anomaly detection and budget-risk scoring once there is enough historical data to evaluate those features safely.
+- Add unusual transaction detection with Isolation Forest after the category prediction path is stable.
+- Explore budget-risk scoring once there is enough historical data to evaluate those features safely.
 - Consider an optional process warmup step only if first-request ML latency becomes user-facing enough to justify the extra startup cost.
 
 ## Current Constraints
 
-- If the sentence-transformers model is unavailable, the service falls back to deterministic random vectors to keep the API online. This preserves availability but not semantic quality.
-- The current approach is optimized for small, user-level datasets, not large shared-model training.
+- If the classifier is unavailable, the route falls back to embeddings. If the sentence-transformers model is also unavailable, the embedding service falls back to deterministic random vectors to keep the API online. This preserves availability but not semantic quality.
+- The current classifier dataset is synthetic, so high local accuracy should be treated as a training sanity check rather than production accuracy.
+- The current classifier only returns supervised predictions when the predicted label can be safely matched to the user's categories.
 - The embedding model is loaded lazily on first use. `backend/app/services/embeddings.py` already caches the model in-process after that first load, but a fresh process still pays the initial warm-start cost.

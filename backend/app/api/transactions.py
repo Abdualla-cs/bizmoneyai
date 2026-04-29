@@ -1,25 +1,41 @@
 import csv
 import io
+import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import extract, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.data_access import TransactionQueryFilters, query_transaction_timeseries
 from app.db.session import get_db
+from app.models.ai_insight import AIInsight
 from app.models.budget import Budget
 from app.models.category import Category
 from app.models.transaction import Transaction
 from app.models.user import User
-from app.schemas.transaction import TransactionCreate, TransactionImportResult, TransactionOut, TransactionUpdate
+from app.schemas.transaction import (
+    TransactionCreate,
+    TransactionImportResult,
+    TransactionOut,
+    TransactionTimeSeriesPoint,
+    TransactionUpdate,
+)
 from app.services.admin_analytics import invalidate_admin_analytics_cache
 from app.services.budget_metrics import normalize_month
+from app.services import fraud_detector
 from app.services.system_log import log_system_event
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+logger = logging.getLogger(__name__)
 
 CSV_CONTENT_TYPES = {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain", "application/octet-stream"}
+UNUSUAL_TRANSACTION_RULE_ID = "ml_unusual_transaction"
+UNUSUAL_TRANSACTION_MESSAGES = {
+    "warning": "Unusual transaction detected. This transaction appears higher risk than normal.",
+    "critical": "Critical unusual transaction detected. Review this transaction immediately.",
+}
 
 
 def _ensure_owned_category(db: Session, category_id: int, user_id: int) -> Category:
@@ -80,11 +96,144 @@ def _category_supports_transaction(category: Category, transaction_type: str) ->
     return category.type == transaction_type or category.type == "both"
 
 
-def _ensure_category_supports_transaction(category: Category, transaction_type: str, row_number: int) -> None:
+def _unsupported_category_type_detail(
+    category: Category,
+    transaction_type: str,
+    row_number: int | None = None,
+) -> str:
+    prefix = f"Row {row_number}: " if row_number is not None else ""
+    return f"{prefix}category '{category.name}' only supports {category.type} transactions"
+
+
+def _ensure_category_supports_transaction(category: Category, transaction_type: str, row_number: int | None = None) -> None:
     if not _category_supports_transaction(category, transaction_type):
         raise HTTPException(
             status_code=400,
-            detail=f"Row {row_number}: category '{category.name}' only supports {category.type} transactions",
+            detail=_unsupported_category_type_detail(category, transaction_type, row_number),
+        )
+
+
+def _transaction_log_metadata(tx: Transaction, category: Category) -> dict[str, object | None]:
+    return {
+        "category_id": category.category_id,
+        "category_name": category.name,
+        "amount": tx.amount,
+        "type": tx.type,
+        "description": tx.description,
+        "date": tx.date.isoformat(),
+    }
+
+
+def _paysim_type_for_transaction(transaction_type: str) -> str:
+    if transaction_type == "income":
+        return "CASH_IN"
+    return "CASH_OUT"
+
+
+def _fraud_payload_for_transaction(tx: Transaction) -> dict[str, object | None]:
+    return {
+        "amount": tx.amount,
+        "type": _paysim_type_for_transaction(tx.type),
+        "step": 0,
+    }
+
+
+def _has_unusual_transaction_insight(db: Session, *, user_id: int, transaction_id: int) -> bool:
+    insights = (
+        db.query(AIInsight)
+        .filter(
+            AIInsight.user_id == user_id,
+            AIInsight.rule_id == UNUSUAL_TRANSACTION_RULE_ID,
+        )
+        .all()
+    )
+    return any(
+        (insight.metadata_json or {}).get("transaction_id") == transaction_id
+        for insight in insights
+    )
+
+
+def _maybe_create_unusual_transaction_insight(
+    db: Session,
+    *,
+    user_id: int,
+    tx: Transaction,
+) -> None:
+    try:
+        if not fraud_detector.is_ready():
+            return
+        result = fraud_detector.predict(_fraud_payload_for_transaction(tx))
+    except Exception:
+        logger.exception("Fraud detection failed for transaction %s", tx.transaction_id)
+        return
+
+    if not isinstance(result, dict):
+        return
+
+    try:
+        risk_level = str(result.get("risk_level") or "normal")
+        fraud_probability = float(result.get("fraud_probability") or 0.0)
+    except (TypeError, ValueError):
+        logger.exception("Ignoring malformed fraud detection result for transaction %s", tx.transaction_id)
+        return
+
+    if risk_level not in UNUSUAL_TRANSACTION_MESSAGES:
+        return
+
+    message = UNUSUAL_TRANSACTION_MESSAGES[risk_level]
+    title = (
+        "Critical Unusual Transaction Detected"
+        if risk_level == "critical"
+        else "Unusual Transaction Detected"
+    )
+
+    try:
+        with db.begin_nested():
+            if _has_unusual_transaction_insight(
+                db,
+                user_id=user_id,
+                transaction_id=tx.transaction_id,
+            ):
+                return
+
+            db.add(
+                AIInsight(
+                    user_id=user_id,
+                    rule_id=UNUSUAL_TRANSACTION_RULE_ID,
+                    title=title,
+                    message=message,
+                    severity=risk_level,
+                    period_start=tx.date,
+                    period_end=tx.date,
+                    metadata_json={
+                        "scope_key": f"transaction:{tx.transaction_id}",
+                        "transaction_id": tx.transaction_id,
+                        "risk_level": risk_level,
+                        "fraud_probability": fraud_probability,
+                        "amount": tx.amount,
+                        "type": tx.type,
+                        "model_name": result.get("model_name"),
+                    },
+                )
+            )
+            log_system_event(
+                db,
+                "unusual_transaction_detected",
+                message,
+                level=risk_level,
+                user_id=user_id,
+                entity_id=tx.transaction_id,
+                metadata={
+                    "transaction_id": tx.transaction_id,
+                    "risk_level": risk_level,
+                    "probability": fraud_probability,
+                },
+            )
+            db.flush()
+    except Exception:
+        logger.exception(
+            "Failed to create unusual transaction insight for transaction %s",
+            tx.transaction_id,
         )
 
 
@@ -327,12 +476,61 @@ async def _import_transactions_upload(
 
 
 @router.get("", response_model=list[TransactionOut])
-def list_transactions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return (
-        db.query(Transaction)
-        .filter(Transaction.user_id == current_user.user_id)
-        .order_by(Transaction.date.desc(), Transaction.created_at.desc())
-        .all()
+def list_transactions(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="date_from must be on or before date_to",
+        )
+
+    query = db.query(Transaction).filter(Transaction.user_id == current_user.user_id)
+    if date_from is not None:
+        query = query.filter(Transaction.date >= date_from)
+    if date_to is not None:
+        query = query.filter(Transaction.date <= date_to)
+    return query.order_by(Transaction.date.desc(), Transaction.created_at.desc()).all()
+
+
+@router.get("/timeseries", response_model=list[TransactionTimeSeriesPoint])
+def list_transaction_timeseries(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    transaction_type: str | None = Query(default=None, alias="type"),
+    category_id: int | None = Query(default=None),
+    granularity: str = Query(default="day"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if granularity not in {"day", "month"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="granularity must be 'day' or 'month'",
+        )
+    if transaction_type is not None and transaction_type not in {"income", "expense"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="type must be income or expense",
+        )
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="date_from must be on or before date_to",
+        )
+    return query_transaction_timeseries(
+        db,
+        TransactionQueryFilters(
+            user_id=current_user.user_id,
+            date_from=date_from,
+            date_to=date_to,
+            transaction_type=transaction_type,  # type: ignore[arg-type]
+            category_id=category_id,
+        ),
+        granularity=granularity,  # type: ignore[arg-type]
     )
 
 
@@ -342,10 +540,26 @@ def create_transaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ensure_owned_category(db, payload.category_id, current_user.user_id)
+    category = _ensure_owned_category(db, payload.category_id, current_user.user_id)
+    _ensure_category_supports_transaction(category, payload.type)
     tx = Transaction(user_id=current_user.user_id, **payload.model_dump())
     db.add(tx)
+    db.flush()
+    log_system_event(
+        db,
+        "create_transaction",
+        f"Created transaction in category '{category.name}'",
+        user_id=current_user.user_id,
+        entity_id=tx.transaction_id,
+        metadata=_transaction_log_metadata(tx, category),
+    )
+    _maybe_create_unusual_transaction_insight(
+        db,
+        user_id=current_user.user_id,
+        tx=tx,
+    )
     db.commit()
+    invalidate_admin_analytics_cache()
     db.refresh(tx)
     return tx
 
@@ -406,13 +620,24 @@ def update_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     data = payload.model_dump(exclude_unset=True)
-    if "category_id" in data:
-        _ensure_owned_category(db, data["category_id"], current_user.user_id)
+    category_id = data.get("category_id", tx.category_id)
+    transaction_type = data.get("type", tx.type)
+    category = _ensure_owned_category(db, category_id, current_user.user_id)
+    _ensure_category_supports_transaction(category, transaction_type)
 
     for field, value in data.items():
         setattr(tx, field, value)
 
+    log_system_event(
+        db,
+        "update_transaction",
+        f"Updated transaction {tx.transaction_id}",
+        user_id=current_user.user_id,
+        entity_id=tx.transaction_id,
+        metadata=_transaction_log_metadata(tx, category),
+    )
     db.commit()
+    invalidate_admin_analytics_cache()
     db.refresh(tx)
     return tx
 
@@ -427,6 +652,17 @@ def delete_transaction(id: int, db: Session = Depends(get_db), current_user: Use
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
+    category = _ensure_owned_category(db, tx.category_id, current_user.user_id)
+    metadata = _transaction_log_metadata(tx, category)
+    log_system_event(
+        db,
+        "delete_transaction",
+        f"Deleted transaction {tx.transaction_id}",
+        user_id=current_user.user_id,
+        entity_id=tx.transaction_id,
+        metadata=metadata,
+    )
     db.delete(tx)
     db.commit()
+    invalidate_admin_analytics_cache()
     return None
