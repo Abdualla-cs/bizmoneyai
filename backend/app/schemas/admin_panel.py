@@ -66,6 +66,21 @@ class AdminLogRow(BaseModel):
     user_email: EmailStr | None = None
 
 
+class AdminUnusualTransactionInsight(BaseModel):
+    insight_id: int
+    user_id: int
+    user_name: str
+    user_email: EmailStr
+    title: str
+    message: str
+    severity: Literal["warning", "critical"]
+    period_start: date
+    period_end: date
+    created_at: datetime
+    transaction_id: int | None = None
+    fraud_probability: float | None = None
+
+
 class AdminPaginationMeta(BaseModel):
     total: int
     limit: int
@@ -88,6 +103,10 @@ class AdminDashboardOut(BaseModel):
     most_active_users: list[AdminActiveUser]
     over_budget_categories: int
     total_overspending_amount: float
+    total_unusual_transactions: int
+    unusual_warning_count: int
+    unusual_critical_count: int
+    recent_unusual_transaction_insights: list[AdminUnusualTransactionInsight]
     recent_logs: list[AdminLogRow]
 
 
@@ -112,6 +131,10 @@ class AdminAnalyticsUsersOut(BaseModel):
 
 class AdminAnalyticsInsightsOut(BaseModel):
     insight_severity_distribution: list[AdminCountByLabel]
+    total_unusual_transactions: int
+    unusual_warning_count: int
+    unusual_critical_count: int
+    recent_unusual_transaction_insights: list[AdminUnusualTransactionInsight]
 
 
 class AdminAnalyticsBudgetsOut(BaseModel):

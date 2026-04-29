@@ -110,13 +110,28 @@ def test_admin_read_endpoints_return_analytics(db_session, monkeypatch):
         period_start=date(2026, 4, 1),
         period_end=date(2026, 4, 30),
     )
+    unusual_insight = AIInsight(
+        user_id=user_one.user_id,
+        rule_id="ml_unusual_transaction",
+        title="Critical Unusual Transaction Detected",
+        message="Critical unusual transaction detected. Review this transaction immediately.",
+        severity="critical",
+        period_start=date(2026, 4, 3),
+        period_end=date(2026, 4, 3),
+        metadata_json={
+            "scope_key": "transaction:1",
+            "transaction_id": 1,
+            "risk_level": "critical",
+            "fraud_probability": 0.91,
+        },
+    )
     user_log = SystemLog(
         user_id=user_one.user_id,
         event_type="user_login",
         message="Alpha User logged in",
         level="info",
     )
-    db_session.add_all([tx, secondary_tx, bonus_tx, budget, secondary_budget, insight, secondary_insight, user_log])
+    db_session.add_all([tx, secondary_tx, bonus_tx, budget, secondary_budget, insight, secondary_insight, unusual_insight, user_log])
     db_session.commit()
 
     app = create_test_app()
@@ -137,11 +152,17 @@ def test_admin_read_endpoints_return_analytics(db_session, monkeypatch):
         assert dashboard_body["total_transactions"] == 3
         assert dashboard_body["total_categories"] == 2
         assert dashboard_body["total_budgets"] == 2
-        assert dashboard_body["total_ai_insights"] == 2
+        assert dashboard_body["total_ai_insights"] == 3
+        assert dashboard_body["total_unusual_transactions"] == 1
+        assert dashboard_body["unusual_warning_count"] == 0
+        assert dashboard_body["unusual_critical_count"] == 1
+        assert dashboard_body["recent_unusual_transaction_insights"][0]["severity"] == "critical"
+        assert dashboard_body["recent_unusual_transaction_insights"][0]["transaction_id"] == 1
+        assert dashboard_body["recent_unusual_transaction_insights"][0]["fraud_probability"] == 0.91
         assert any(item["total_events"] >= 1 for item in dashboard_body["activity_trends"])
         assert any(item["transactions_count"] == 1 for item in dashboard_body["transaction_trends"])
         assert any(item["total_amount"] == 80.0 for item in dashboard_body["transaction_trends"])
-        assert {item["label"] for item in dashboard_body["insight_severity_distribution"]} == {"info", "warning"}
+        assert {item["label"] for item in dashboard_body["insight_severity_distribution"]} == {"critical", "info", "warning"}
         assert dashboard_body["spend_distribution"][0]["category_name"] == "Food"
         assert dashboard_body["top_overspending_categories"][0]["category_name"] == "Food"
         assert dashboard_body["over_budget_categories"] == 1
@@ -168,7 +189,12 @@ def test_admin_read_endpoints_return_analytics(db_session, monkeypatch):
 
         insights_analytics_response = client.get("/admin/analytics/insights")
         assert insights_analytics_response.status_code == 200
-        assert {item["label"] for item in insights_analytics_response.json()["insight_severity_distribution"]} == {"info", "warning"}
+        insights_analytics_body = insights_analytics_response.json()
+        assert {item["label"] for item in insights_analytics_body["insight_severity_distribution"]} == {"critical", "info", "warning"}
+        assert insights_analytics_body["total_unusual_transactions"] == 1
+        assert insights_analytics_body["unusual_warning_count"] == 0
+        assert insights_analytics_body["unusual_critical_count"] == 1
+        assert insights_analytics_body["recent_unusual_transaction_insights"][0]["title"] == "Critical Unusual Transaction Detected"
 
         budgets_analytics_response = client.get("/admin/analytics/budgets")
         assert budgets_analytics_response.status_code == 200
@@ -184,8 +210,14 @@ def test_admin_read_endpoints_return_analytics(db_session, monkeypatch):
         assert scoped_dashboard_body["total_transactions"] == 2
         assert scoped_dashboard_body["total_categories"] == 1
         assert scoped_dashboard_body["total_budgets"] == 1
-        assert scoped_dashboard_body["total_ai_insights"] == 1
-        assert scoped_dashboard_body["insight_severity_distribution"] == [{"label": "warning", "count": 1}]
+        assert scoped_dashboard_body["total_ai_insights"] == 2
+        assert scoped_dashboard_body["total_unusual_transactions"] == 1
+        assert scoped_dashboard_body["unusual_warning_count"] == 0
+        assert scoped_dashboard_body["unusual_critical_count"] == 1
+        assert scoped_dashboard_body["insight_severity_distribution"] == [
+            {"label": "critical", "count": 1},
+            {"label": "warning", "count": 1},
+        ]
         assert scoped_dashboard_body["spend_distribution"] == [
             {"category_name": "Food", "total_amount": 80.0, "transactions_count": 1}
         ]
@@ -224,7 +256,7 @@ def test_admin_read_endpoints_return_analytics(db_session, monkeypatch):
         assert users_body["users"][0]["transactions_count"] == 2
         assert users_body["users"][0]["categories_count"] == 1
         assert users_body["users"][0]["budgets_count"] == 1
-        assert users_body["users"][0]["insights_count"] == 1
+        assert users_body["users"][0]["insights_count"] == 2
         assert users_body["users"][0]["last_activity"] is not None
         assert users_body["summary"]["active_count"] == 1
 

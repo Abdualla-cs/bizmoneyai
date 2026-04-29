@@ -20,6 +20,7 @@ const EVENT_TYPE_OPTIONS = [
   "enable_user",
   "generate_insights",
   "import_transactions",
+  "unusual_transaction_detected",
   "update_transaction",
   "update_budget",
   "user_login",
