@@ -14,8 +14,13 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+frontend/*/.next/
+frontend/*/.env.local
+
+backend/data/raw/
+backend/data/processed/
+
+backend/app/ml/models/*.joblib
 parts/
 sdist/
 var/
