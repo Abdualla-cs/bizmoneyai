@@ -1,5 +1,6 @@
 "use client";
 
+import axios from "axios";
 import { useEffect, useState } from "react";
 
 import Navbar from "@/components/Navbar";
@@ -22,9 +23,20 @@ const BADGE = { info: "bg-blue-100 text-blue-700", warning: "bg-yellow-100 text-
 const today = new Date().toISOString().slice(0, 10);
 const defaultStart = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
+function readableApiError(error: unknown, fallback: string) {
+  if (!axios.isAxiosError(error)) return fallback;
+
+  const detail = error.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (!error.response) return "Could not reach the API. Check that the backend is running and try again.";
+  return fallback;
+}
+
 export default function InsightsPage() {
   const { user, loading } = useAuth();
   const [insights, setInsights] = useState<Insight[]>([]);
+  const [loadingInsights, setLoadingInsights] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [gen, setGen] = useState(false);
   const [msg, setMsg] = useState("");
   const [periodStart, setPeriodStart] = useState(defaultStart);
@@ -32,13 +44,21 @@ export default function InsightsPage() {
   const [severityFilter, setSeverityFilter] = useState<"all" | "info" | "warning" | "critical">("all");
 
   const refresh = async () => {
-    const r = await api.get<Insight[]>("/ai/insights");
-    setInsights(r.data);
+    setLoadingInsights(true);
+    setLoadError("");
+    try {
+      const r = await api.get<Insight[]>("/ai/insights");
+      setInsights(r.data);
+    } catch (error) {
+      setLoadError(readableApiError(error, "Failed to load insights."));
+    } finally {
+      setLoadingInsights(false);
+    }
   };
 
   useEffect(() => {
     if (!user) return;
-    refresh();
+    void refresh();
   }, [user]);
 
   const generate = async () => {
@@ -58,8 +78,8 @@ export default function InsightsPage() {
           : `Generated ${r.data.length} new insight(s) for ${periodStart} to ${periodEnd}.`,
       );
       await refresh();
-    } catch {
-      setMsg("Failed to generate insights.");
+    } catch (error) {
+      setMsg(readableApiError(error, "Failed to generate insights."));
     } finally {
       setGen(false);
     }
@@ -101,6 +121,14 @@ export default function InsightsPage() {
         </div>
 
         {msg && <div className="rounded-lg bg-slate-100 px-4 py-3 text-sm text-slate-700">{msg}</div>}
+        {loadError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <span>{loadError}</span>
+            <button type="button" onClick={() => void refresh()} className="bg-red-100 text-red-800 hover:bg-red-200">
+              Retry
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           {([
@@ -120,7 +148,11 @@ export default function InsightsPage() {
           ))}
         </div>
 
-        {filteredInsights.length === 0 ? (
+        {loadingInsights && insights.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center">
+            <p className="text-lg text-slate-400">Loading insights...</p>
+          </div>
+        ) : filteredInsights.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center">
             <p className="text-lg text-slate-400">{insights.length === 0 ? "No insights yet." : "No insights match this filter."}</p>
           </div>
