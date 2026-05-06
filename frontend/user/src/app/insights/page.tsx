@@ -9,6 +9,7 @@ import api from "@/lib/api";
 
 type Insight = {
   insight_id: number;
+  rule_id: string | null;
   title: string;
   message: string;
   severity: "info" | "warning" | "critical";
@@ -164,9 +165,16 @@ export default function InsightsPage() {
                   <div className="flex-1">
                     <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
                       <h3 className={`font-semibold ${TXT[ins.severity]}`}>{ins.title}</h3>
-                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${BADGE[ins.severity]}`}>
-                        {ins.severity.toUpperCase()}
-                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {ins.rule_id === "ml_unusual_transaction" && (
+                          <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white">
+                            Model 2
+                          </span>
+                        )}
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${BADGE[ins.severity]}`}>
+                          {ins.severity.toUpperCase()}
+                        </span>
+                      </div>
                     </div>
                     <p className={`text-sm ${TXT[ins.severity]}`}>{ins.message}</p>
                     <p className="mt-2 text-xs text-slate-400">
