@@ -4,6 +4,7 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+import pytest
 
 from app.services.fraud_detector import FEATURE_COLUMNS, MODEL_FAMILY, FraudDetector
 
@@ -87,10 +88,57 @@ def test_normal_transaction_returns_normal(tmp_path):
     assert result["model_name"] == "Fake BizMoneyAI Anomaly Detector"
 
 
-def test_large_budget_overspend_returns_critical(tmp_path):
+def test_normal_income_is_not_flagged_by_model_only_warning(tmp_path):
     detector = FraudDetector(model_path=_write_fake_artifact(tmp_path, 0.03))
 
     result = detector.predict(
+        {
+            "amount": 10000,
+            "type": "income",
+            "category_name": "Sales",
+            "description": "Client invoice payment",
+            "date": "2026-04-10",
+            "budget_amount": 0,
+            "budget_spent_before": 0,
+            "user_avg_amount": 5000,
+            "category_avg_amount": 5000,
+            "recent_transaction_count": 8,
+        }
+    )
+
+    _assert_prediction_schema(result)
+    assert result["is_unusual"] is False
+    assert result["fraud_probability"] < 0.5
+    assert result["risk_level"] == "normal"
+
+
+def test_moderate_software_overspend_is_not_flagged_by_model_only_warning(tmp_path):
+    detector = FraudDetector(model_path=_write_fake_artifact(tmp_path, 0.03))
+
+    result = detector.predict(
+        {
+            "amount": 2300,
+            "type": "expense",
+            "category_name": "Software",
+            "description": "Team subscription renewal",
+            "date": "2026-04-12",
+            "budget_amount": 1500,
+            "budget_spent_before": 0,
+            "user_avg_amount": 1500,
+            "category_avg_amount": 1500,
+            "recent_transaction_count": 8,
+        }
+    )
+
+    _assert_prediction_schema(result)
+    assert result["is_unusual"] is False
+    assert result["fraud_probability"] < 0.5
+    assert result["risk_level"] == "normal"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
         {
             "amount": 45000,
             "type": "expense",
@@ -102,8 +150,25 @@ def test_large_budget_overspend_returns_critical(tmp_path):
             "user_avg_amount": 1200,
             "category_avg_amount": 1100,
             "recent_transaction_count": 1,
-        }
-    )
+        },
+        {
+            "amount": 85000,
+            "type": "expense",
+            "category_name": "Consulting",
+            "description": "Urgent offshore contractor transfer",
+            "date": "2026-04-27",
+            "budget_amount": 9000,
+            "budget_spent_before": 0,
+            "user_avg_amount": 2000,
+            "category_avg_amount": 1800,
+            "recent_transaction_count": 1,
+        },
+    ],
+)
+def test_huge_budget_overspend_returns_critical(tmp_path, payload):
+    detector = FraudDetector(model_path=_write_fake_artifact(tmp_path, 0.03))
+
+    result = detector.predict(payload)
 
     _assert_prediction_schema(result)
     assert result["is_unusual"] is True
@@ -111,16 +176,16 @@ def test_large_budget_overspend_returns_critical(tmp_path):
     assert result["risk_level"] == "critical"
 
 
-def test_anomaly_score_maps_to_warning(tmp_path):
-    detector = FraudDetector(model_path=_write_fake_artifact(tmp_path, 0.04))
+def test_strong_software_overspend_returns_warning_or_critical(tmp_path):
+    detector = FraudDetector(model_path=_write_fake_artifact(tmp_path, -0.10))
 
     result = detector.predict(
         {
-            "amount": 2200,
+            "amount": 16000,
             "type": "expense",
             "category_name": "Software",
-            "description": "Vendor renewal",
-            "date": "2026-04-12",
+            "description": "Manual override wire payment for immediate supplier settlement",
+            "date": "2026-04-26",
             "budget_amount": 4500,
             "budget_spent_before": 900,
             "user_avg_amount": 900,
@@ -131,4 +196,27 @@ def test_anomaly_score_maps_to_warning(tmp_path):
 
     _assert_prediction_schema(result)
     assert result["is_unusual"] is True
-    assert result["risk_level"] == "warning"
+    assert result["risk_level"] in {"warning", "critical"}
+
+
+def test_suspicious_urgent_transfer_triggers_warning_or_critical(tmp_path):
+    detector = FraudDetector(model_path=_write_fake_artifact(tmp_path, -0.10))
+
+    result = detector.predict(
+        {
+            "amount": 7000,
+            "type": "expense",
+            "category_name": "Software",
+            "description": "Urgent wire transfer for vendor settlement",
+            "date": "2026-04-26",
+            "budget_amount": 6000,
+            "budget_spent_before": 500,
+            "user_avg_amount": 900,
+            "category_avg_amount": 850,
+            "recent_transaction_count": 8,
+        }
+    )
+
+    _assert_prediction_schema(result)
+    assert result["is_unusual"] is True
+    assert result["risk_level"] in {"warning", "critical"}

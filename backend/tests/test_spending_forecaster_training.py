@@ -35,8 +35,15 @@ FIELDNAMES = [
     "rolling_3_month_expense_avg",
     "rolling_6_month_expense_avg",
     "expense_growth_rate",
+    "expense_delta_1m",
+    "expense_delta_2m",
+    "monthly_expense_slope",
+    "last_3_month_growth_rate",
+    "current_vs_rolling_3_ratio",
     "expense_to_income_ratio",
+    "income_growth_rate",
     "budget_usage_ratio",
+    "budget_growth_rate",
     "budget_exceeded",
     "top_spend_category_1",
     "top_spend_category_2",
@@ -70,8 +77,15 @@ def _base_row(month_start: str, *, clean_expense: float, previous_expense: float
         "rolling_3_month_expense_avg": clean_expense,
         "rolling_6_month_expense_avg": clean_expense,
         "expense_growth_rate": 0.0,
+        "expense_delta_1m": clean_expense - previous_expense,
+        "expense_delta_2m": previous_expense - two_months_ago,
+        "monthly_expense_slope": (clean_expense - two_months_ago) / 2.0,
+        "last_3_month_growth_rate": (clean_expense - two_months_ago) / two_months_ago,
+        "current_vs_rolling_3_ratio": 1.0,
         "expense_to_income_ratio": clean_expense / 1000.0,
+        "income_growth_rate": 0.0,
         "budget_usage_ratio": clean_expense / 500.0,
+        "budget_growth_rate": 0.0,
         "budget_exceeded": 0,
         "top_spend_category_1": "Marketing",
         "top_spend_category_2": "Software",
@@ -91,6 +105,9 @@ def test_model_3_feature_policy_uses_clean_spending_columns() -> None:
     assert "clean_total_expense" in FEATURE_COLUMNS
     assert "previous_month_expense" in FEATURE_COLUMNS
     assert "rolling_3_month_expense_avg" in FEATURE_COLUMNS
+    assert "expense_delta_1m" in FEATURE_COLUMNS
+    assert "monthly_expense_slope" in FEATURE_COLUMNS
+    assert "current_vs_rolling_3_ratio" in FEATURE_COLUMNS
     assert not (set(FEATURE_COLUMNS) & FORBIDDEN_FEATURE_COLUMNS)
 
 

@@ -32,6 +32,14 @@ class CleanExpenseEchoModel:
         return [float(row["clean_total_expense"]) for row in rows]
 
 
+class TrendProjectionModel:
+    def predict(self, rows: list[dict[str, Any]]) -> list[float]:
+        return [
+            float(row["clean_total_expense"]) + float(row["monthly_expense_slope"])
+            for row in rows
+        ]
+
+
 def _write_artifact(tmp_path: Path, model: object) -> Path:
     model_path = tmp_path / "spending_forecaster.joblib"
     joblib.dump(
@@ -230,6 +238,36 @@ def test_service_returns_forecast_schema(db_session, tmp_path: Path) -> None:
     assert result["predicted_next_month_expense"] >= 0.0
     assert result["confidence_level"] == "medium"
     assert result["model_name"] == DEFAULT_MODEL_NAME
+
+
+def test_increasing_trend_forecast_is_not_far_below_current_month(db_session, tmp_path: Path) -> None:
+    forecaster = SpendingForecaster(model_path=_write_artifact(tmp_path, TrendProjectionModel()))
+    user, income, marketing, software = _create_user(db_session)
+    for month, amount in [
+        (date(2026, 1, 1), 5850.0),
+        (date(2026, 2, 1), 6820.0),
+        (date(2026, 3, 1), 7790.0),
+        (date(2026, 4, 1), 8750.0),
+    ]:
+        _add_month(
+            db_session,
+            user=user,
+            income=income,
+            marketing=marketing,
+            software=software,
+            month=month,
+            marketing_amount=amount * 0.60,
+            software_amount=amount * 0.40,
+            budget_total=amount * 1.10,
+        )
+    db_session.commit()
+
+    result = forecaster.forecast_for_user(db_session, user.user_id)
+
+    assert result["current_month_expense"] == 8750.0
+    assert result["previous_month_expense"] == 7790.0
+    assert result["rolling_3_month_expense_avg"] == 7786.67
+    assert result["predicted_next_month_expense"] >= result["current_month_expense"]
 
 
 def test_recommendation_mentions_top_categories_when_forecast_exceeds_budget(db_session, tmp_path: Path) -> None:

@@ -330,7 +330,7 @@ def test_import_exact_csv_creates_expected_warning_and_critical_insights(db_sess
             "Software,850,expense,Team subscription renewal,2026-04-04,4500,2026-04\n"
             "Marketing,900,expense,Campaign spend,2026-04-05,4000,2026-04\n"
             "Travel,620,expense,Regional client visit,2026-04-08,2500,2026-04\n"
-            "Sales,7200,income,Client invoice payment,2026-04-10,,\n"
+            "Sales,10000,income,Client invoice payment,2026-04-10,,\n"
             "Marketing,45000,expense,Emergency vendor transfer for urgent campaign settlement,2026-04-25,4000,2026-04\n"
             "Software,16000,expense,Manual override wire payment for immediate supplier settlement,2026-04-26,4500,2026-04\n"
             "Consulting,85000,expense,Urgent offshore contractor transfer,2026-04-27,9000,2026-04\n"
@@ -355,6 +355,9 @@ def test_import_exact_csv_creates_expected_warning_and_critical_insights(db_sess
         assert suspicious_by_amount[16000.0]["fraud_probability"] == 0.741667
         assert suspicious_by_amount[85000.0]["fraud_risk_level"] == "critical"
         assert suspicious_by_amount[85000.0]["fraud_probability"] == 0.92
+        normal_income = next(tx for tx in body["transactions"] if float(tx["amount"]) == 10000.0)
+        assert normal_income["fraud_risk_level"] is None
+        assert normal_income["fraud_probability"] is None
 
         insights = (
             db_session.query(AIInsight)

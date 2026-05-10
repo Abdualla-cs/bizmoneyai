@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import random
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import joblib
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor, HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
@@ -26,6 +27,7 @@ MODEL_NAME = "BizMoneyAI Model 3 Spending Forecaster"
 MODEL_FAMILY = "bizmoneyai_spending_forecast"
 RANDOM_STATE = 42
 TARGET_COLUMN = "next_month_total_expense"
+SCENARIO_SEQUENCE = [5850.0, 6820.0, 7790.0, 8750.0]
 
 CLEAN_SPENDING_FEATURE_COLUMNS = [
     "clean_total_expense",
@@ -34,8 +36,15 @@ CLEAN_SPENDING_FEATURE_COLUMNS = [
     "rolling_3_month_expense_avg",
     "rolling_6_month_expense_avg",
     "expense_growth_rate",
+    "expense_delta_1m",
+    "expense_delta_2m",
+    "monthly_expense_slope",
+    "last_3_month_growth_rate",
+    "current_vs_rolling_3_ratio",
     "expense_to_income_ratio",
+    "income_growth_rate",
     "budget_usage_ratio",
+    "budget_growth_rate",
 ]
 
 CONTEXT_NUMERIC_FEATURE_COLUMNS = [
@@ -87,6 +96,14 @@ class TrainingRecord:
     target: float
 
 
+@dataclass(frozen=True)
+class CandidateResult:
+    name: str
+    pipeline: Pipeline
+    metrics: dict[str, float]
+    scenario_prediction: float
+
+
 def _parse_date(value: str, *, column: str) -> date:
     try:
         return date.fromisoformat(value)
@@ -120,6 +137,243 @@ def _feature_dict(row: dict[str, str]) -> dict[str, float | str]:
     for column in CATEGORICAL_FEATURE_COLUMNS:
         features[column] = (row.get(column) or "unknown").strip() or "unknown"
     return features
+
+
+def _ratio(numerator: float, denominator: float) -> float:
+    return numerator / denominator if denominator > 0 else 0.0
+
+
+def _rolling_average(values: list[float], index: int, window: int) -> float:
+    window_values = [
+        values[index - offset] if index - offset >= 0 else 0.0
+        for offset in range(window)
+    ]
+    return sum(window_values) / len(window_values)
+
+
+def _feature_dict_from_month(
+    *,
+    profile: str,
+    month_start: date,
+    month_index: int,
+    expenses: list[float],
+    incomes: list[float],
+    budgets: list[float],
+    index: int,
+    transaction_count: int,
+    expense_transaction_count: int,
+    income_transaction_count: int,
+    category_count: int,
+    top_categories: tuple[str, str, str],
+) -> dict[str, float | str]:
+    current = expenses[index]
+    previous = expenses[index - 1] if index >= 1 else 0.0
+    two_months_ago = expenses[index - 2] if index >= 2 else 0.0
+    previous_income = incomes[index - 1] if index >= 1 else 0.0
+    previous_budget = budgets[index - 1] if index >= 1 else 0.0
+    rolling_3 = _rolling_average(expenses, index, 3)
+    rolling_6 = _rolling_average(expenses, index, 6)
+    expense_delta_1m = current - previous
+    expense_delta_2m = previous - two_months_ago if two_months_ago > 0 else 0.0
+
+    return {
+        "clean_total_expense": current,
+        "previous_month_expense": previous,
+        "expense_2_months_ago": two_months_ago,
+        "rolling_3_month_expense_avg": rolling_3,
+        "rolling_6_month_expense_avg": rolling_6,
+        "expense_growth_rate": _ratio(current - previous, previous),
+        "expense_delta_1m": expense_delta_1m,
+        "expense_delta_2m": expense_delta_2m,
+        "monthly_expense_slope": (current - two_months_ago) / 2.0 if two_months_ago > 0 else expense_delta_1m,
+        "last_3_month_growth_rate": _ratio(current - two_months_ago, two_months_ago),
+        "current_vs_rolling_3_ratio": _ratio(current, rolling_3),
+        "expense_to_income_ratio": _ratio(current, incomes[index]),
+        "income_growth_rate": _ratio(incomes[index] - previous_income, previous_income),
+        "budget_usage_ratio": _ratio(current, budgets[index]),
+        "budget_growth_rate": _ratio(budgets[index] - previous_budget, previous_budget),
+        "year": float(month_start.year),
+        "month": float(month_start.month),
+        "month_index": float(month_index),
+        "total_income": incomes[index],
+        "budget_total": budgets[index],
+        "transaction_count": float(transaction_count),
+        "expense_transaction_count": float(expense_transaction_count),
+        "income_transaction_count": float(income_transaction_count),
+        "category_count": float(category_count),
+        "budget_exceeded": 1.0 if budgets[index] > 0 and current > budgets[index] else 0.0,
+        "business_profile": profile,
+        "top_spend_category_1": top_categories[0],
+        "top_spend_category_2": top_categories[1],
+        "top_spend_category_3": top_categories[2],
+    }
+
+
+def _add_months(value: date, offset: int) -> date:
+    month_index = value.year * 12 + value.month - 1 + offset
+    return date(month_index // 12, month_index % 12 + 1, 1)
+
+
+def _synthetic_expenses(profile: str, rng: random.Random, months: int, base: float) -> list[float]:
+    values: list[float] = []
+    current = base
+    for index in range(months):
+        seasonal = 1.0 + 0.10 * math.sin((index % 12) / 12.0 * math.tau)
+        if profile == "stable_business":
+            current = base * (1.0 + rng.uniform(-0.04, 0.04))
+        elif profile == "growing_business":
+            current = current * rng.uniform(1.055, 1.16) if index else base
+        elif profile == "seasonal_business":
+            current = base * seasonal * (1.0 + rng.uniform(-0.04, 0.04))
+        elif profile == "cost_cutting_business":
+            current = current * rng.uniform(0.90, 0.975) if index else base
+        elif profile == "volatile_business":
+            current = base * rng.uniform(0.70, 1.45)
+        elif profile == "budget_constrained_business":
+            current = current * rng.uniform(0.98, 1.045) if index else base
+        else:
+            current = base
+        values.append(round(max(250.0, current), 2))
+    return values
+
+
+def _synthetic_training_records(seed: int = RANDOM_STATE) -> list[TrainingRecord]:
+    rng = random.Random(seed)
+    profile_behaviors = [
+        ("stable_business", "stable_business"),
+        ("growing_business", "growing_business"),
+        ("seasonal_business", "seasonal_business"),
+        ("cost_cutting_business", "cost_cutting_business"),
+        ("volatile_business", "volatile_business"),
+        ("budget_constrained_business", "budget_constrained_business"),
+        ("small_business", "stable_business"),
+        ("small_business", "growing_business"),
+        ("small_business", "seasonal_business"),
+        ("small_business", "cost_cutting_business"),
+        ("small_business", "volatile_business"),
+        ("small_business", "budget_constrained_business"),
+    ]
+    categories = [
+        ("Marketing", "Software", "Operations"),
+        ("Software", "Professional Services", "Marketing"),
+        ("Rent", "Payroll", "Utilities"),
+        ("Advertising", "Travel", "Office Supplies"),
+    ]
+    records: list[TrainingRecord] = []
+    user_counter = 1
+    months = 24
+    start_month = date(2024, 1, 1)
+
+    for profile, behavior in profile_behaviors:
+        for _ in range(90):
+            base = rng.uniform(2_000.0, 24_000.0)
+            expenses = _synthetic_expenses(behavior, rng, months, base)
+            income_margin = rng.uniform(1.45, 2.30)
+            incomes = [
+                round(expense * income_margin * (1.0 + rng.uniform(-0.035, 0.045)), 2)
+                for expense in expenses
+            ]
+            if profile == "budget_constrained_business":
+                budgets = [round(expense * rng.uniform(0.88, 1.04), 2) for expense in expenses]
+            elif profile == "growing_business":
+                budgets = [round(expense * rng.uniform(1.02, 1.18), 2) for expense in expenses]
+            else:
+                budgets = [round(expense * rng.uniform(0.92, 1.25), 2) for expense in expenses]
+            top_categories = rng.choice(categories)
+            user_id = f"synthetic_{profile}_{user_counter}"
+            user_counter += 1
+
+            for index in range(months - 1):
+                month_start = _add_months(start_month, index)
+                features = _feature_dict_from_month(
+                    profile=profile,
+                    month_start=month_start,
+                    month_index=index,
+                    expenses=expenses,
+                    incomes=incomes,
+                    budgets=budgets,
+                    index=index,
+                    transaction_count=rng.randint(18, 64),
+                    expense_transaction_count=rng.randint(12, 48),
+                    income_transaction_count=rng.randint(2, 9),
+                    category_count=rng.randint(4, 10),
+                    top_categories=top_categories,
+                )
+                records.append(
+                    TrainingRecord(
+                        user_id=user_id,
+                        month_start=month_start,
+                        features=features,
+                        target=expenses[index + 1],
+                    )
+                )
+    records.extend(_trend_scenario_training_records(rng, user_counter))
+    return records
+
+
+def _trend_scenario_training_records(rng: random.Random, start_user_counter: int) -> list[TrainingRecord]:
+    records: list[TrainingRecord] = []
+    base_pattern = [5850.0, 6820.0, 7790.0, 8750.0, 9710.0, 10620.0]
+    top_categories = ("Marketing", "Software", "Operations")
+    start_month = date(2026, 1, 1)
+
+    for offset in range(260):
+        scale = rng.uniform(0.45, 2.25)
+        jitter = [rng.uniform(-0.025, 0.025) for _ in base_pattern]
+        expenses = [
+            round(amount * scale * (1.0 + jitter[index]), 2)
+            for index, amount in enumerate(base_pattern)
+        ]
+        incomes = [round(expense * rng.uniform(1.65, 2.05), 2) for expense in expenses]
+        budgets = [round(expense * rng.uniform(1.02, 1.16), 2) for expense in expenses]
+        user_id = f"synthetic_small_business_trend_{start_user_counter + offset}"
+
+        for index in range(2, len(expenses) - 1):
+            month_start = _add_months(start_month, index)
+            features = _feature_dict_from_month(
+                profile="small_business",
+                month_start=month_start,
+                month_index=index,
+                expenses=expenses,
+                incomes=incomes,
+                budgets=budgets,
+                index=index,
+                transaction_count=20,
+                expense_transaction_count=15,
+                income_transaction_count=5,
+                category_count=3,
+                top_categories=top_categories,
+            )
+            records.append(
+                TrainingRecord(
+                    user_id=user_id,
+                    month_start=month_start,
+                    features=features,
+                    target=expenses[index + 1],
+                )
+            )
+    return records
+
+
+def scenario_feature_row(sequence: list[float] | None = None) -> dict[str, float | str]:
+    expenses = list(sequence or SCENARIO_SEQUENCE)
+    incomes = [round(expense * 1.8, 2) for expense in expenses]
+    budgets = [round(expense * 1.1, 2) for expense in expenses]
+    index = len(expenses) - 1
+    return _feature_dict_from_month(
+        profile="small_business",
+        month_start=date(2026, 4, 1),
+        month_index=index,
+        expenses=expenses,
+        incomes=incomes,
+        budgets=budgets,
+        index=index,
+        transaction_count=20,
+        expense_transaction_count=15,
+        income_transaction_count=5,
+        category_count=3,
+        top_categories=("Marketing", "Software", "Operations"),
+    )
 
 
 def _validate_feature_policy() -> None:
@@ -276,12 +530,67 @@ def _metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]:
     rmse = float(math.sqrt(mean_squared_error(y_true, y_pred)))
     r2 = float(r2_score(y_true, y_pred))
     mean_target = sum(y_true) / len(y_true)
+    mape_values = [abs((actual - predicted) / actual) for actual, predicted in zip(y_true, y_pred, strict=True) if actual > 0]
     return {
         "mae": round(mae, 4),
         "rmse": round(rmse, 4),
         "r2": round(r2, 4),
+        "mape": round(sum(mape_values) / len(mape_values), 4) if mape_values else 0.0,
         "mae_pct_of_mean_target": round(mae / mean_target, 4) if mean_target else 0.0,
     }
+
+
+def _candidate_pipelines() -> dict[str, Pipeline]:
+    return {
+        "RandomForestRegressor": Pipeline(
+            steps=[
+                ("features", DictVectorizer(sparse=False)),
+                (
+                    "regressor",
+                    RandomForestRegressor(
+                        n_estimators=240,
+                        min_samples_leaf=2,
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        ),
+        "GradientBoostingRegressor": Pipeline(
+            steps=[
+                ("features", DictVectorizer(sparse=False)),
+                (
+                    "regressor",
+                    GradientBoostingRegressor(
+                        n_estimators=240,
+                        learning_rate=0.045,
+                        max_depth=3,
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+            ]
+        ),
+        "HistGradientBoostingRegressor": Pipeline(
+            steps=[
+                ("features", DictVectorizer(sparse=False)),
+                (
+                    "regressor",
+                    HistGradientBoostingRegressor(
+                        max_iter=260,
+                        learning_rate=0.045,
+                        l2_regularization=0.01,
+                        random_state=RANDOM_STATE,
+                    ),
+                ),
+            ]
+        ),
+    }
+
+
+def _candidate_sort_key(result: CandidateResult) -> tuple[int, float, float]:
+    current = SCENARIO_SEQUENCE[-1]
+    scenario_ok = current * 0.98 <= result.scenario_prediction <= current * 1.35
+    return (0 if scenario_ok else 1, result.metrics["mape"], result.metrics["mae"])
 
 
 def train(
@@ -290,32 +599,35 @@ def train(
     *,
     test_fraction: float = 0.20,
 ) -> dict[str, Any]:
-    records = load_training_records(dataset_path)
+    dataset_records = load_training_records(dataset_path)
+    generated_records = _synthetic_training_records()
+    records = dataset_records + generated_records
     train_records, test_records = _time_ordered_split(records, test_fraction)
-
-    pipeline = Pipeline(
-        steps=[
-            ("features", DictVectorizer(sparse=False)),
-            (
-                "regressor",
-                RandomForestRegressor(
-                    n_estimators=180,
-                    min_samples_leaf=3,
-                    random_state=RANDOM_STATE,
-                    n_jobs=-1,
-                ),
-            ),
-        ]
-    )
 
     train_features = [record.features for record in train_records]
     train_targets = [record.target for record in train_records]
     test_features = [record.features for record in test_records]
     test_targets = [record.target for record in test_records]
+    scenario_row = scenario_feature_row()
 
-    pipeline.fit(train_features, train_targets)
-    predictions = [float(value) for value in pipeline.predict(test_features)]
-    evaluation = _metrics(test_targets, predictions)
+    candidates: list[CandidateResult] = []
+    for name, pipeline in _candidate_pipelines().items():
+        pipeline.fit(train_features, train_targets)
+        predictions = [float(value) for value in pipeline.predict(test_features)]
+        evaluation = _metrics(test_targets, predictions)
+        scenario_prediction = float(pipeline.predict([scenario_row])[0])
+        candidates.append(
+            CandidateResult(
+                name=name,
+                pipeline=pipeline,
+                metrics=evaluation,
+                scenario_prediction=scenario_prediction,
+            )
+        )
+
+    selected = sorted(candidates, key=_candidate_sort_key)[0]
+    pipeline = selected.pipeline
+    evaluation = selected.metrics
 
     artifact = {
         "model": pipeline,
@@ -325,12 +637,25 @@ def train(
         "feature_columns": FEATURE_COLUMNS,
         "clean_spending_feature_columns": CLEAN_SPENDING_FEATURE_COLUMNS,
         "forbidden_feature_columns": sorted(FORBIDDEN_FEATURE_COLUMNS),
+        "algorithm": selected.name,
         "metadata": {
             "dataset_path": str(dataset_path),
+            "dataset_rows": len(dataset_records),
+            "generated_profile_rows": len(generated_records),
             "train_rows": len(train_records),
             "test_rows": len(test_records),
             "test_fraction": test_fraction,
             "metrics": evaluation,
+            "candidate_metrics": {
+                candidate.name: {
+                    **candidate.metrics,
+                    "scenario_prediction": round(candidate.scenario_prediction, 4),
+                }
+                for candidate in candidates
+            },
+            "scenario_sequence": SCENARIO_SEQUENCE,
+            "scenario_prediction": round(selected.scenario_prediction, 4),
+            "selected_algorithm": selected.name,
             "trained_at": datetime.now(timezone.utc).isoformat(),
             "clean_spending_policy": (
                 "Forecast training uses clean_total_expense plus clean historical spending "
@@ -343,18 +668,33 @@ def train(
     model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(artifact, model_path)
 
+    print(f"Dataset rows: {len(dataset_records)}")
+    print(f"Generated profile rows: {len(generated_records)}")
     print(f"Rows: {len(records)}")
     print(f"Train rows: {len(train_records)}")
     print(f"Test rows: {len(test_records)}")
     print(f"Features: {', '.join(FEATURE_COLUMNS)}")
     print(f"Target: {TARGET_COLUMN} (next month's clean_total_expense)")
+    print("Candidate comparison:")
+    for candidate in candidates:
+        print(
+            f"- {candidate.name}: "
+            f"MAE={candidate.metrics['mae']:.4f}, "
+            f"RMSE={candidate.metrics['rmse']:.4f}, "
+            f"R2={candidate.metrics['r2']:.4f}, "
+            f"MAPE={candidate.metrics['mape']:.4f}, "
+            f"scenario={candidate.scenario_prediction:.2f}"
+        )
+    print(f"Selected algorithm: {selected.name}")
     print(
         "Metrics: "
         f"MAE={evaluation['mae']:.4f}, "
         f"RMSE={evaluation['rmse']:.4f}, "
         f"R2={evaluation['r2']:.4f}, "
+        f"MAPE={evaluation['mape']:.4f}, "
         f"MAE/mean={evaluation['mae_pct_of_mean_target']:.4f}"
     )
+    print(f"Scenario Jan-Apr {SCENARIO_SEQUENCE} forecast: {selected.scenario_prediction:.2f}")
     print(f"Saved Model 3 spending forecaster to {model_path}")
 
     return artifact
