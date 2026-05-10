@@ -8,6 +8,7 @@ import app.api.ml as ml_api
 from app.core.security import create_access_token
 from app.db.session import get_db
 from app.main import app
+from app.ml.forecasting.train_spending_forecaster import FEATURE_COLUMNS
 from app.models.ai_insight import AIInsight
 from app.models.budget import Budget
 from app.models.category import Category
@@ -229,30 +230,7 @@ def test_forecast_spending_excludes_unusual_transactions_via_api_path(db_session
     model_path = tmp_path / "missing.joblib"
     forecaster = SpendingForecaster(model_path=model_path)
     forecaster._model = type("EchoModel", (), {"predict": lambda self, rows: [float(rows[0]["clean_total_expense"])]})()
-    forecaster._feature_columns = [
-        "business_profile",
-        "year",
-        "month",
-        "month_index",
-        "total_income",
-        "clean_total_expense",
-        "budget_total",
-        "transaction_count",
-        "expense_transaction_count",
-        "income_transaction_count",
-        "category_count",
-        "previous_month_expense",
-        "expense_2_months_ago",
-        "rolling_3_month_expense_avg",
-        "rolling_6_month_expense_avg",
-        "expense_growth_rate",
-        "expense_to_income_ratio",
-        "budget_usage_ratio",
-        "budget_exceeded",
-        "top_spend_category_1",
-        "top_spend_category_2",
-        "top_spend_category_3",
-    ]
+    forecaster._feature_columns = FEATURE_COLUMNS
     forecaster._model_name = DEFAULT_MODEL_NAME
 
     client, user, income, marketing, software = _service_backed_client(db_session, monkeypatch, forecaster)

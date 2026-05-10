@@ -31,6 +31,38 @@ MEANINGFUL_OVER_BUDGET_FLOOR = 100.0
 MEANINGFUL_OVER_BUDGET_RATIO = 0.10
 CRITICAL_BUDGET_RATIO = 1.50
 
+MODEL_FEATURE_COLUMNS = [
+    "clean_total_expense",
+    "previous_month_expense",
+    "expense_2_months_ago",
+    "rolling_3_month_expense_avg",
+    "rolling_6_month_expense_avg",
+    "expense_growth_rate",
+    "expense_delta_1m",
+    "expense_delta_2m",
+    "monthly_expense_slope",
+    "last_3_month_growth_rate",
+    "current_vs_rolling_3_ratio",
+    "expense_to_income_ratio",
+    "income_growth_rate",
+    "budget_usage_ratio",
+    "budget_growth_rate",
+    "year",
+    "month",
+    "month_index",
+    "total_income",
+    "budget_total",
+    "transaction_count",
+    "expense_transaction_count",
+    "income_transaction_count",
+    "category_count",
+    "budget_exceeded",
+    "business_profile",
+    "top_spend_category_1",
+    "top_spend_category_2",
+    "top_spend_category_3",
+]
+
 ConfidenceLevel = Literal["low", "medium", "high", "unavailable"]
 
 
@@ -310,6 +342,10 @@ class SpendingForecaster:
             logger.warning("Ignoring spending forecaster artifact without feature columns")
             return
 
+        if feature_columns != MODEL_FEATURE_COLUMNS:
+            logger.warning("Ignoring spending forecaster artifact with incompatible feature columns")
+            return
+
         self._model = model
         self._feature_columns = feature_columns
         self._model_name = str(artifact.get("model_name") or metadata.get("model_name") or DEFAULT_MODEL_NAME)
@@ -401,6 +437,14 @@ class SpendingForecaster:
         ]
         return sum(values) / len(values) if values else 0.0
 
+    def _income_for_month(self, snapshots_by_month: dict[date, MonthSnapshot], month_start: date) -> float:
+        snapshot = snapshots_by_month.get(month_start)
+        return float(snapshot.total_income if snapshot is not None else 0.0)
+
+    def _budget_for_month(self, snapshots_by_month: dict[date, MonthSnapshot], month_start: date) -> float:
+        snapshot = snapshots_by_month.get(month_start)
+        return float(snapshot.budget_total if snapshot is not None else 0.0)
+
     def _build_feature_row(self, snapshots: list[MonthSnapshot]) -> dict[str, float | str]:
         latest = snapshots[-1]
         first_month = snapshots[0].month_start
@@ -410,9 +454,38 @@ class SpendingForecaster:
         expense_2_months_ago = self._expense_for_month(snapshots_by_month, _shift_month(latest.month_start, -2))
         rolling_3_month_expense_avg = self._rolling_expense_average(snapshots_by_month, latest.month_start, 3)
         rolling_6_month_expense_avg = self._rolling_expense_average(snapshots_by_month, latest.month_start, 6)
+        previous_month_income = self._income_for_month(snapshots_by_month, _shift_month(latest.month_start, -1))
+        previous_month_budget = self._budget_for_month(snapshots_by_month, _shift_month(latest.month_start, -1))
+        expense_delta_1m = latest.clean_total_expense - previous_month_expense
+        expense_delta_2m = previous_month_expense - expense_2_months_ago if expense_2_months_ago > 0 else 0.0
+        monthly_expense_slope = (
+            (latest.clean_total_expense - expense_2_months_ago) / 2.0
+            if expense_2_months_ago > 0
+            else expense_delta_1m
+        )
+        last_3_month_growth_rate = (
+            (latest.clean_total_expense - expense_2_months_ago) / expense_2_months_ago
+            if expense_2_months_ago > 0
+            else 0.0
+        )
+        current_vs_rolling_3_ratio = (
+            latest.clean_total_expense / rolling_3_month_expense_avg
+            if rolling_3_month_expense_avg > 0
+            else 0.0
+        )
         expense_growth_rate = (
             (latest.clean_total_expense - previous_month_expense) / previous_month_expense
             if previous_month_expense > 0
+            else 0.0
+        )
+        income_growth_rate = (
+            (latest.total_income - previous_month_income) / previous_month_income
+            if previous_month_income > 0
+            else 0.0
+        )
+        budget_growth_rate = (
+            (latest.budget_total - previous_month_budget) / previous_month_budget
+            if previous_month_budget > 0
             else 0.0
         )
         top_categories = latest.top_expense_categories
@@ -434,8 +507,15 @@ class SpendingForecaster:
             "rolling_3_month_expense_avg": rolling_3_month_expense_avg,
             "rolling_6_month_expense_avg": rolling_6_month_expense_avg,
             "expense_growth_rate": expense_growth_rate,
+            "expense_delta_1m": expense_delta_1m,
+            "expense_delta_2m": expense_delta_2m,
+            "monthly_expense_slope": monthly_expense_slope,
+            "last_3_month_growth_rate": last_3_month_growth_rate,
+            "current_vs_rolling_3_ratio": current_vs_rolling_3_ratio,
             "expense_to_income_ratio": latest.expense_to_income_ratio,
+            "income_growth_rate": income_growth_rate,
             "budget_usage_ratio": latest.budget_usage_ratio,
+            "budget_growth_rate": budget_growth_rate,
             "budget_exceeded": latest.budget_exceeded,
             "top_spend_category_1": top_categories[0] if len(top_categories) >= 1 else "unknown",
             "top_spend_category_2": top_categories[1] if len(top_categories) >= 2 else "unknown",

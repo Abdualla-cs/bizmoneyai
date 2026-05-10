@@ -118,6 +118,9 @@ export default function DashboardPage() {
         : forecast?.confidence_level === "low"
           ? "bg-amber-100 text-amber-800"
           : "bg-slate-200 text-slate-700";
+  const confidenceLabel = forecastLoading
+    ? "Loading"
+    : `${forecast?.confidence_level?.charAt(0).toUpperCase() ?? "U"}${forecast?.confidence_level?.slice(1) ?? "navailable"}`;
 
   return (
     <>
@@ -229,8 +232,8 @@ export default function DashboardPage() {
             <div>
               <h2 className="font-semibold text-ink">Predicted Next-Month Spending</h2>
             </div>
-            <span className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${confidenceTone}`}>
-              {forecastLoading ? "Loading" : forecast?.confidence_level ?? "unavailable"}
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${confidenceTone}`}>
+              Confidence: {confidenceLabel}
             </span>
           </div>
 

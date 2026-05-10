@@ -16,8 +16,10 @@ from app.ml.forecasting.train_spending_forecaster import (
     DEFAULT_MODEL_PATH,
     FORBIDDEN_FEATURE_COLUMNS,
     MODEL_FAMILY,
+    SCENARIO_SEQUENCE,
     TARGET_COLUMN,
     _parse_date,
+    scenario_feature_row,
     _validate_clean_lag_features,
     _validate_clean_targets,
 )
@@ -75,6 +77,7 @@ class ForecastValidationResult:
     forbidden_columns: list[str]
     metrics: dict[str, float | None]
     evaluated_rows: int
+    scenario_prediction: float | None
     examples: list[ForecastPrediction]
     sanity_examples: dict[str, ForecastPrediction | None]
     clean_spending_confirmed: bool
@@ -310,6 +313,7 @@ def validate_spending_forecaster(
 
     model = artifact["model"]
     raw_predictions = [float(value) for value in model.predict([record.features for record in evaluation_records])]
+    scenario_prediction = float(model.predict([scenario_feature_row()])[0])
     predictions = [_prediction(record, predicted) for record, predicted in zip(evaluation_records, raw_predictions, strict=True)]
     actuals = [record.target for record in evaluation_records]
     clipped_predictions = [prediction.predicted for prediction in predictions]
@@ -330,6 +334,7 @@ def validate_spending_forecaster(
         forbidden_columns=sorted(EXPLICIT_LEAKAGE_COLUMNS | set(FORBIDDEN_FEATURE_COLUMNS)),
         metrics=metrics,
         evaluated_rows=len(evaluation_records),
+        scenario_prediction=round(max(0.0, scenario_prediction), 4),
         examples=predictions[:example_count],
         sanity_examples=_select_sanity_examples(evaluation_records, predictions_by_key),
         clean_spending_confirmed=True,
@@ -358,6 +363,7 @@ def print_validation_report(result: ForecastValidationResult) -> None:
     print(f"- RMSE: {result.metrics['rmse']}")
     print(f"- R2: {result.metrics['r2']}")
     print(f"- MAPE: {result.metrics['mape'] if result.metrics['mape'] is not None else 'n/a'}")
+    print(f"Scenario Jan-Apr {SCENARIO_SEQUENCE} forecast: {_format_money(result.scenario_prediction)}")
 
     print("Example predictions:")
     for example in result.examples:

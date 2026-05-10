@@ -18,6 +18,21 @@ WARNING_THRESHOLD = 0.50
 CRITICAL_THRESHOLD = 0.80
 DEFAULT_WARNING_RAW_THRESHOLD = 0.0
 DEFAULT_CRITICAL_RAW_THRESHOLD = 0.08
+EXPENSE_WARNING_PROJECTED_BUDGET_RATIO = 2.0
+EXPENSE_WARNING_BUDGET_OVERSPEND_RATIO = 1.0
+EXPENSE_WARNING_AMOUNT_TO_BUDGET_RATIO = 3.0
+EXPENSE_URGENT_DESCRIPTION_SCORE = 0.45
+EXPENSE_URGENT_MIN_AMOUNT = 5_000.0
+EXPENSE_AVG_SPIKE_MIN_AMOUNT = 5_000.0
+EXPENSE_AVG_SPIKE_USER_RATIO = 4.0
+EXPENSE_AVG_SPIKE_CATEGORY_RATIO = 3.5
+EXPENSE_CRITICAL_BUDGET_OVERSPEND_RATIO = 4.0
+EXPENSE_CRITICAL_AMOUNT_TO_BUDGET_RATIO = 8.0
+EXPENSE_CRITICAL_MIN_AMOUNT = 10_000.0
+EXPENSE_LARGE_AMOUNT = 25_000.0
+INCOME_EXTREME_MIN_AMOUNT = 50_000.0
+INCOME_EXTREME_USER_RATIO = 8.0
+INCOME_EXTREME_CATEGORY_RATIO = 6.0
 
 FEATURE_COLUMNS = [
     "log_amount",
@@ -317,21 +332,73 @@ class FraudDetector:
         amount = math.expm1(log_amount)
         is_expense = features["is_expense"] >= 0.5
 
-        if is_expense and (overspend >= 4.0 or (amount_to_budget >= 8.0 and amount >= 10_000)):
+        if is_expense and (
+            overspend >= EXPENSE_CRITICAL_BUDGET_OVERSPEND_RATIO
+            or (
+                amount_to_budget >= EXPENSE_CRITICAL_AMOUNT_TO_BUDGET_RATIO
+                and amount >= EXPENSE_CRITICAL_MIN_AMOUNT
+            )
+        ):
             return 0.92
-        if is_expense and (overspend >= 1.0 or projected_budget >= 2.0):
+        if is_expense and self._has_budget_warning_signal(features):
             return 0.70
         if is_expense and amount >= 10_000 and user_ratio >= 10.0 and category_ratio >= 8.0:
             return 0.86
-        if is_expense and amount >= 5_000 and user_ratio >= 4.0 and category_ratio >= 3.5:
+        if is_expense and self._has_average_spike_signal(features):
             return 0.62
-        if is_expense and amount >= 15_000 and urgency >= 0.45:
+        if is_expense and self._has_urgent_description_signal(features):
             return 0.70
-        if is_expense and amount >= 25_000:
+        if is_expense and amount >= EXPENSE_LARGE_AMOUNT:
             return 0.60
-        if not is_expense and amount >= 50_000 and user_ratio >= 8.0:
+        if not is_expense and self._has_extreme_income_signal(features):
             return 0.62
         return 0.0
+
+    def _has_budget_warning_signal(self, features: dict[str, float]) -> bool:
+        return (
+            features["projected_budget_usage_ratio"] >= EXPENSE_WARNING_PROJECTED_BUDGET_RATIO
+            and features["budget_overspend_ratio"] >= EXPENSE_WARNING_BUDGET_OVERSPEND_RATIO
+            and features["amount_to_budget_ratio"] >= EXPENSE_WARNING_AMOUNT_TO_BUDGET_RATIO
+        )
+
+    def _has_average_spike_signal(self, features: dict[str, float]) -> bool:
+        amount = math.expm1(features["log_amount"])
+        return (
+            amount >= EXPENSE_AVG_SPIKE_MIN_AMOUNT
+            and features["amount_to_user_avg_ratio"] >= EXPENSE_AVG_SPIKE_USER_RATIO
+            and features["amount_to_category_avg_ratio"] >= EXPENSE_AVG_SPIKE_CATEGORY_RATIO
+        )
+
+    def _has_urgent_description_signal(self, features: dict[str, float]) -> bool:
+        amount = math.expm1(features["log_amount"])
+        return (
+            features["description_urgency_score"] >= EXPENSE_URGENT_DESCRIPTION_SCORE
+            and (
+                amount >= EXPENSE_URGENT_MIN_AMOUNT
+                or features["amount_to_budget_ratio"] >= EXPENSE_WARNING_AMOUNT_TO_BUDGET_RATIO
+                or self._has_average_spike_signal(features)
+            )
+        )
+
+    def _has_extreme_income_signal(self, features: dict[str, float]) -> bool:
+        amount = math.expm1(features["log_amount"])
+        return (
+            amount >= INCOME_EXTREME_MIN_AMOUNT
+            and features["amount_to_user_avg_ratio"] >= INCOME_EXTREME_USER_RATIO
+            and features["amount_to_category_avg_ratio"] >= INCOME_EXTREME_CATEGORY_RATIO
+        )
+
+    def _has_warning_signal(self, features: dict[str, float]) -> bool:
+        is_expense = features["is_expense"] >= 0.5
+        amount = math.expm1(features["log_amount"])
+        if not is_expense:
+            return self._has_extreme_income_signal(features)
+        return (
+            self._has_budget_warning_signal(features)
+            or self._has_average_spike_signal(features)
+            or self._has_urgent_description_signal(features)
+            or amount >= EXPENSE_LARGE_AMOUNT
+        )
 
     def _risk_level(self, risk_score: float) -> RiskLevel:
         if risk_score >= CRITICAL_THRESHOLD:
@@ -349,6 +416,8 @@ class FraudDetector:
             raw_score = self._raw_anomaly_score(feature_row)
             features = build_feature_values(payload)
             risk_score = max(self._model_risk_score(raw_score), self._contextual_risk_floor(features))
+            if risk_score >= WARNING_THRESHOLD and not self._has_warning_signal(features):
+                risk_score = min(risk_score, WARNING_THRESHOLD - 0.01)
             risk_score = _clamp(risk_score)
             risk_level = self._risk_level(risk_score)
             return {
