@@ -27,6 +27,11 @@ DEFAULT_MODEL_NAME = "BizMoneyAI Model 4 Smart Budget Recommender"
 MODEL_FAMILY = "smart_budget_recommender"
 UNUSUAL_TRANSACTION_RULE_ID = "ml_unusual_transaction"
 UNUSUAL_TRANSACTION_SEVERITIES = ("warning", "critical")
+BUDGET_RECOMMENDATION_RULE_ID = "ml_budget_recommendation"
+BUDGET_RECOMMENDATION_SOURCE = "budget_recommender"
+MEANINGFUL_CHANGE_PERCENT = 0.15
+STRONG_CHANGE_PERCENT = 0.25
+CRITICAL_CHANGE_PERCENT = 0.75
 
 MODEL_FEATURE_COLUMNS = [
     "clean_monthly_spend",
@@ -163,12 +168,16 @@ def _reason(
     if months_used < 2:
         return "Not enough clean spending history is available yet, so this is a low-confidence fallback."
     if recommended_budget > current_budget and months_over_budget_3 > 0:
-        return "Clean spending has been over budget recently, so the recommendation increases the category budget."
+        return "Clean spending shows repeated overspending, so the recommendation increases the category budget."
     if recommended_budget > current_budget and clean_monthly_spend > current_budget:
         return "Current clean spend is above budget, so the recommendation raises the category budget."
     if recommended_budget < current_budget:
         return "Clean spending is below the current budget, so the recommendation keeps the budget closer to actual use."
     return "Clean spending is stable, so the recommendation stays close to the current category budget."
+
+
+def _format_money(value: float) -> str:
+    return f"${value:,.2f}"
 
 
 def _fallback_recommendation(
@@ -480,6 +489,135 @@ class BudgetRecommender:
             "months_used": history.months_used,
         }
 
+    def _target_month(self, history: CategoryHistory) -> date:
+        return _shift_month(history.latest_month, 1)
+
+    def _budget_recommendation_scope_key(self, *, category_id: int, target_month: date) -> str:
+        return f"category:{category_id}:target_month:{target_month.isoformat()}"
+
+    def _has_budget_recommendation_insight(
+        self,
+        db: Session,
+        *,
+        user_id: int,
+        target_month: date,
+        scope_key: str,
+    ) -> bool:
+        existing = (
+            db.query(AIInsight)
+            .filter(
+                AIInsight.user_id == user_id,
+                AIInsight.rule_id == BUDGET_RECOMMENDATION_RULE_ID,
+                AIInsight.period_start == target_month,
+                AIInsight.period_end == _month_end(target_month),
+            )
+            .all()
+        )
+        return any((insight.metadata_json or {}).get("scope_key") == scope_key for insight in existing)
+
+    def _should_create_budget_recommendation_insight(
+        self,
+        recommendation: BudgetRecommendation,
+        features: dict[str, float | str],
+    ) -> bool:
+        if recommendation["confidence_level"] not in {"medium", "high"}:
+            return False
+        if recommendation["expected_change_amount"] <= 0:
+            return False
+        if recommendation["expected_change_percent"] < MEANINGFUL_CHANGE_PERCENT:
+            return False
+
+        repeated_overspending = _safe_float(features["months_over_budget_3"]) >= 2 or _safe_float(features["months_over_budget_6"]) >= 3
+        growth_trend = _safe_float(features["growth_rate_3m"]) >= MEANINGFUL_CHANGE_PERCENT
+        strong_increase = recommendation["expected_change_percent"] >= STRONG_CHANGE_PERCENT
+        return repeated_overspending or growth_trend or strong_increase
+
+    def _budget_recommendation_severity(
+        self,
+        recommendation: BudgetRecommendation,
+        features: dict[str, float | str],
+    ) -> Literal["info", "warning", "critical"]:
+        months_over_budget_6 = _safe_float(features["months_over_budget_6"])
+        if months_over_budget_6 >= 5 and recommendation["expected_change_percent"] >= CRITICAL_CHANGE_PERCENT:
+            return "critical"
+        if (
+            _safe_float(features["months_over_budget_3"]) >= 2
+            or recommendation["expected_change_percent"] >= STRONG_CHANGE_PERCENT
+        ):
+            return "warning"
+        return "info"
+
+    def _budget_recommendation_message(
+        self,
+        recommendation: BudgetRecommendation,
+        features: dict[str, float | str],
+    ) -> str:
+        reasons: list[str] = []
+        if _safe_float(features["growth_rate_3m"]) >= MEANINGFUL_CHANGE_PERCENT:
+            reasons.append("recent growth")
+        if _safe_float(features["months_over_budget_3"]) >= 2 or _safe_float(features["months_over_budget_6"]) >= 3:
+            reasons.append("repeated overspending")
+        reason_text = " and ".join(reasons) if reasons else "recent clean spending"
+        return (
+            f"Your {recommendation['category_name']} budget may be too low for next month. "
+            f"Recommended budget: {_format_money(recommendation['recommended_budget'])} "
+            f"based on {reason_text}."
+        )
+
+    def _maybe_create_budget_recommendation_insight(
+        self,
+        db: Session,
+        *,
+        user_id: int,
+        history: CategoryHistory,
+        features: dict[str, float | str],
+        recommendation: BudgetRecommendation,
+    ) -> bool:
+        if not self._should_create_budget_recommendation_insight(recommendation, features):
+            return False
+
+        target_month = self._target_month(history)
+        scope_key = self._budget_recommendation_scope_key(
+            category_id=int(history.category.category_id),
+            target_month=target_month,
+        )
+        if self._has_budget_recommendation_insight(
+            db,
+            user_id=user_id,
+            target_month=target_month,
+            scope_key=scope_key,
+        ):
+            return False
+
+        insight = AIInsight(
+            user_id=user_id,
+            rule_id=BUDGET_RECOMMENDATION_RULE_ID,
+            title=f"{recommendation['category_name']} Budget May Need Adjustment",
+            message=self._budget_recommendation_message(recommendation, features),
+            severity=self._budget_recommendation_severity(recommendation, features),
+            period_start=target_month,
+            period_end=_month_end(target_month),
+            metadata_json={
+                "scope_key": scope_key,
+                "source": BUDGET_RECOMMENDATION_SOURCE,
+                "category_id": recommendation["category_id"],
+                "category_name": recommendation["category_name"],
+                "current_budget": recommendation["current_budget"],
+                "recommended_budget": recommendation["recommended_budget"],
+                "expected_change_amount": recommendation["expected_change_amount"],
+                "expected_change_percent": recommendation["expected_change_percent"],
+                "confidence_level": recommendation["confidence_level"],
+                "behavior_group": recommendation["behavior_group"],
+                "target_month": target_month.isoformat(),
+                "months_used": recommendation["months_used"],
+                "months_over_budget_3": _safe_float(features["months_over_budget_3"]),
+                "months_over_budget_6": _safe_float(features["months_over_budget_6"]),
+                "growth_rate_3m": _safe_float(features["growth_rate_3m"]),
+            },
+        )
+        db.add(insight)
+        return True
+
     def _recommend_with_fallback(
         self,
         history: CategoryHistory,
@@ -502,9 +640,11 @@ class BudgetRecommender:
         )
 
     def recommend_budgets_for_user(self, db: Session, user: User) -> list[BudgetRecommendation]:
+        user_id = int(user.user_id)
         histories = self._category_histories(db, int(user.user_id))
         model_ready = self.is_ready()
         recommendations: list[BudgetRecommendation] = []
+        insight_created = False
 
         for history in histories:
             try:
@@ -517,19 +657,35 @@ class BudgetRecommender:
                 raw_prediction = _prediction_value(self._regressor.predict([features])[0])
                 recommended_budget = _safe_recommendation(features, raw_prediction)
                 cluster_label = self._cluster_label(features)
-                recommendations.append(
-                    self._response(
+                recommendation = self._response(
+                    history=history,
+                    features=features,
+                    recommended_budget=recommended_budget,
+                    confidence_level=_confidence(history.months_used, model_ready=True),
+                    cluster_label=cluster_label,
+                    model_ready=True,
+                )
+                recommendations.append(recommendation)
+                insight_created = (
+                    self._maybe_create_budget_recommendation_insight(
+                        db,
+                        user_id=user_id,
                         history=history,
                         features=features,
-                        recommended_budget=recommended_budget,
-                        confidence_level=_confidence(history.months_used, model_ready=True),
-                        cluster_label=cluster_label,
-                        model_ready=True,
+                        recommendation=recommendation,
                     )
+                    or insight_created
                 )
             except Exception:
                 logger.exception("Budget recommendation failed for category %s", history.category.category_id)
                 recommendations.append(self._recommend_with_fallback(history, model_ready=False))
+
+        if insight_created:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("Failed to create budget recommendation insights for user %s", user_id)
 
         return recommendations
 
