@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -17,6 +18,7 @@ from app.schemas.ai_insight import (
 )
 from app.services.admin_analytics import invalidate_admin_analytics_cache
 from app.services import insight_ranker
+from app.services.fraud_insights import UNUSUAL_TRANSACTION_RULE_ID
 from app.services.rules_engine import run_rules_for_user
 from app.services.system_log import log_system_event
 
@@ -85,21 +87,30 @@ def clear_insights(
 ):
     deleted_count = (
         db.query(AIInsight)
-        .filter(AIInsight.user_id == current_user.user_id)
+        .filter(
+            AIInsight.user_id == current_user.user_id,
+            or_(
+                AIInsight.rule_id.is_(None),
+                AIInsight.rule_id != UNUSUAL_TRANSACTION_RULE_ID,
+            ),
+        )
         .delete(synchronize_session=False)
     )
     log_system_event(
         db,
         "clear_ai_insights",
-        f"Cleared {deleted_count} AI insights",
+        f"Cleared {deleted_count} non-fraud AI insights",
         user_id=current_user.user_id,
-        metadata={"deleted_count": int(deleted_count or 0)},
+        metadata={
+            "deleted_count": int(deleted_count or 0),
+            "preserved_rule_ids": [UNUSUAL_TRANSACTION_RULE_ID],
+        },
     )
     db.commit()
     invalidate_admin_analytics_cache()
     return AIInsightClearResponse(
         deleted_count=int(deleted_count or 0),
-        message="AI insights cleared successfully.",
+        message="Rule-based AI insights cleared successfully. Fraud alerts were preserved.",
     )
 
 

@@ -304,13 +304,115 @@ def test_ai_clear_insights_deletes_only_current_users_insights_and_preserves_oth
         assert response.status_code == 200
         assert response.json() == {
             "deleted_count": 2,
-            "message": "AI insights cleared successfully.",
+            "message": "Rule-based AI insights cleared successfully. Fraud alerts were preserved.",
         }
         assert db_session.query(AIInsight).filter(AIInsight.user_id == user.user_id).count() == 0
         assert db_session.query(AIInsight).filter(AIInsight.user_id == other_user.user_id).count() == 1
         assert db_session.query(Transaction).filter(Transaction.user_id == user.user_id).count() == 2
         assert db_session.query(Budget).filter(Budget.user_id == user.user_id).count() == 1
         assert db_session.query(Category).filter(Category.user_id == user.user_id).count() == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ai_clear_insights_preserves_unusual_transaction_alerts_and_transaction_badges(db_session):
+    user = User(name="Clear Fraud Alert User", email="clear-fraud-alert@example.com", password_hash="x")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    income = Category(user_id=user.user_id, name="Sales", type="income")
+    expense = Category(user_id=user.user_id, name="Operations", type="expense")
+    db_session.add_all([income, expense])
+    db_session.commit()
+    db_session.refresh(income)
+    db_session.refresh(expense)
+
+    income_tx = Transaction(
+        user_id=user.user_id,
+        category_id=income.category_id,
+        amount=1000.0,
+        type="income",
+        description="Monthly sales",
+        date=date(2026, 4, 5),
+    )
+    suspicious_tx = Transaction(
+        user_id=user.user_id,
+        category_id=expense.category_id,
+        amount=1200.0,
+        type="expense",
+        description="Unusual vendor payment",
+        date=date(2026, 4, 12),
+    )
+    db_session.add_all([income_tx, suspicious_tx])
+    db_session.commit()
+    db_session.refresh(suspicious_tx)
+
+    db_session.add_all(
+        [
+            AIInsight(
+                user_id=user.user_id,
+                rule_id="expense_ratio",
+                title="High expense ratio",
+                message="Expenses are high this period.",
+                severity="warning",
+                period_start=date(2026, 4, 1),
+                period_end=date(2026, 4, 30),
+                metadata_json={"scope_key": "period"},
+            ),
+            AIInsight(
+                user_id=user.user_id,
+                rule_id="ml_unusual_transaction",
+                title="Critical Unusual Transaction Detected",
+                message="Critical unusual transaction detected. Review this transaction immediately.",
+                severity="critical",
+                period_start=suspicious_tx.date,
+                period_end=suspicious_tx.date,
+                metadata_json={
+                    "scope_key": f"transaction:{suspicious_tx.transaction_id}",
+                    "transaction_id": suspicious_tx.transaction_id,
+                    "risk_level": "critical",
+                    "fraud_probability": 0.91,
+                },
+            ),
+        ]
+    )
+    db_session.commit()
+
+    suspicious_tx_id = suspicious_tx.transaction_id
+    fraud_insight = (
+        db_session.query(AIInsight)
+        .filter(AIInsight.user_id == user.user_id, AIInsight.rule_id == "ml_unusual_transaction")
+        .one()
+    )
+    fraud_insight_id = fraud_insight.insight_id
+
+    client = _build_authenticated_client(db_session, user)
+
+    try:
+        clear_response = client.delete("/ai/insights/clear")
+        assert clear_response.status_code == 200
+        assert clear_response.json()["deleted_count"] == 1
+
+        remaining_insights = db_session.query(AIInsight).filter(AIInsight.user_id == user.user_id).all()
+        assert len(remaining_insights) == 1
+        assert remaining_insights[0].rule_id == "ml_unusual_transaction"
+
+        transactions_response = client.get("/transactions")
+        assert transactions_response.status_code == 200
+        tx_by_id = {item["transaction_id"]: item for item in transactions_response.json()}
+        assert tx_by_id[suspicious_tx_id]["fraud_risk_level"] == "critical"
+        assert tx_by_id[suspicious_tx_id]["fraud_probability"] == 0.91
+        assert tx_by_id[suspicious_tx_id]["fraud_insight_id"] == fraud_insight_id
+
+        generate_response = client.post(
+            "/ai/generate",
+            json={"period_start": "2026-04-01", "period_end": "2026-04-30"},
+        )
+        assert generate_response.status_code == 200
+        generated = generate_response.json()
+        assert len(generated) >= 1
+        assert any(item["rule_id"] != "ml_unusual_transaction" for item in generated)
     finally:
         app.dependency_overrides.clear()
 
@@ -328,7 +430,7 @@ def test_ai_clear_insights_returns_zero_when_user_has_no_insights(db_session):
         assert response.status_code == 200
         assert response.json() == {
             "deleted_count": 0,
-            "message": "AI insights cleared successfully.",
+            "message": "Rule-based AI insights cleared successfully. Fraud alerts were preserved.",
         }
     finally:
         app.dependency_overrides.clear()

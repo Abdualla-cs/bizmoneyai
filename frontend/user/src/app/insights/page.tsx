@@ -143,7 +143,7 @@ export default function InsightsPage() {
   };
 
   const clearInsights = async () => {
-    if (!window.confirm("Are you sure you want to clear all your AI insights?")) {
+    if (!window.confirm("Clear rule-based AI insights? Fraud and unusual transaction alerts will be preserved.")) {
       return;
     }
 
