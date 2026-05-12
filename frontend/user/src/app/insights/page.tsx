@@ -143,7 +143,7 @@ export default function InsightsPage() {
   };
 
   const clearInsights = async () => {
-    if (!window.confirm("Clear rule-based AI insights? Fraud and unusual transaction alerts will be preserved.")) {
+    if (!window.confirm("Clear rule-based AI insights? ML forecast, budget recommendation, and unusual transaction alerts will be preserved.")) {
       return;
     }
 

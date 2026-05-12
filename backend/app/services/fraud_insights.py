@@ -5,8 +5,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.ai_insight import AIInsight
+from app.services.ai_insight_rules import ML_UNUSUAL_TRANSACTION_RULE_ID
 
-UNUSUAL_TRANSACTION_RULE_ID = "ml_unusual_transaction"
+UNUSUAL_TRANSACTION_RULE_ID = ML_UNUSUAL_TRANSACTION_RULE_ID
 UNUSUAL_TRANSACTION_MESSAGES = {
     "warning": "Unusual transaction detected. This transaction appears higher risk than normal.",
     "critical": "Critical unusual transaction detected. Review this transaction immediately.",

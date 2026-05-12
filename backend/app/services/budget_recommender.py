@@ -18,6 +18,10 @@ from app.models.budget import Budget
 from app.models.category import Category
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.ai_insight_rules import (
+    ML_BUDGET_RECOMMENDATION_RULE_ID,
+    ML_UNUSUAL_TRANSACTION_RULE_ID,
+)
 from app.services.budget_metrics import normalize_month
 
 logger = logging.getLogger(__name__)
@@ -25,9 +29,9 @@ logger = logging.getLogger(__name__)
 MODEL_PATH = Path(__file__).resolve().parents[1] / "ml" / "models" / "budget_recommender.joblib"
 DEFAULT_MODEL_NAME = "BizMoneyAI Model 4 Smart Budget Recommender"
 MODEL_FAMILY = "smart_budget_recommender"
-UNUSUAL_TRANSACTION_RULE_ID = "ml_unusual_transaction"
+UNUSUAL_TRANSACTION_RULE_ID = ML_UNUSUAL_TRANSACTION_RULE_ID
 UNUSUAL_TRANSACTION_SEVERITIES = ("warning", "critical")
-BUDGET_RECOMMENDATION_RULE_ID = "ml_budget_recommendation"
+BUDGET_RECOMMENDATION_RULE_ID = ML_BUDGET_RECOMMENDATION_RULE_ID
 BUDGET_RECOMMENDATION_SOURCE = "budget_recommender"
 MEANINGFUL_CHANGE_PERCENT = 0.15
 STRONG_CHANGE_PERCENT = 0.25

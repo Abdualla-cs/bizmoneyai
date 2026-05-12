@@ -157,6 +157,38 @@ def test_ranked_insights_fallback_works_when_model_unavailable(db_session, tmp_p
         app.dependency_overrides.clear()
 
 
+def test_ranked_insights_includes_rule_based_and_ml_created_insights(db_session, tmp_path: Path, monkeypatch) -> None:
+    _force_fallback_ranker(monkeypatch, tmp_path)
+    user = _user(db_session, email="ranked-all-ml@example.com")
+    created_at = datetime(2026, 4, 5, 10, 0, 0)
+    expected_rule_ids = {
+        "expense_ratio",
+        "ml_unusual_transaction",
+        "ml_spending_forecast_risk",
+        "ml_budget_recommendation",
+    }
+    for index, rule_id in enumerate(sorted(expected_rule_ids), start=1):
+        _insight(
+            db_session,
+            user=user,
+            rule_id=rule_id,
+            title=f"Insight {index}",
+            severity="warning",
+            created_at=created_at,
+            metadata_json={"source": rule_id.replace("ml_", "")} if rule_id.startswith("ml_") else None,
+        )
+    client = _client(db_session, user)
+
+    try:
+        response = client.get("/ai/insights/ranked")
+        assert response.status_code == 200
+        body = response.json()
+        assert {item["rule_id"] for item in body} == expected_rule_ids
+        assert all("priority_score" in item for item in body)
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_ranked_insights_only_returns_current_user_and_honors_filters(db_session, tmp_path: Path, monkeypatch) -> None:
     _force_fallback_ranker(monkeypatch, tmp_path)
     user = _user(db_session, email="ranked-owner@example.com")

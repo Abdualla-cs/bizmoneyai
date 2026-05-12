@@ -253,3 +253,29 @@ def test_response_schema_contains_frontend_friendly_fields(db_session, tmp_path:
         "expected_change_percent",
         "months_used",
     }
+
+
+def test_budget_recommendation_insight_is_created_for_meaningful_model_recommendation(db_session, tmp_path: Path) -> None:
+    recommender = BudgetRecommender(model_path=_write_artifact(tmp_path))
+    user = _create_user(db_session, email="budget-rec-insight@example.com")
+    marketing = _category(db_session, user=user, name="Marketing")
+    _add_month(db_session, user=user, category=marketing, amount=400.0, month=date(2026, 2, 1), budget_amount=300.0)
+    _add_month(db_session, user=user, category=marketing, amount=450.0, month=date(2026, 3, 1), budget_amount=300.0)
+    _add_month(db_session, user=user, category=marketing, amount=500.0, month=date(2026, 4, 1), budget_amount=300.0)
+    _add_month(db_session, user=user, category=marketing, amount=600.0, month=date(2026, 5, 1), budget_amount=300.0)
+    db_session.commit()
+
+    recommendations = recommender.recommend_budgets_for_user(db_session, user)
+
+    assert recommendations[0]["confidence_level"] == "medium"
+    assert recommendations[0]["expected_change_amount"] > 0
+    insight = (
+        db_session.query(AIInsight)
+        .filter(AIInsight.user_id == user.user_id, AIInsight.rule_id == "ml_budget_recommendation")
+        .one()
+    )
+    assert insight.severity in {"warning", "critical"}
+    assert insight.period_start == date(2026, 6, 1)
+    assert insight.metadata_json is not None
+    assert insight.metadata_json["source"] == "budget_recommender"
+    assert insight.metadata_json["category_id"] == marketing.category_id

@@ -16,6 +16,10 @@ from app.models.ai_insight import AIInsight
 from app.models.budget import Budget
 from app.models.category import Category
 from app.models.transaction import Transaction
+from app.services.ai_insight_rules import (
+    ML_SPENDING_FORECAST_RISK_RULE_ID,
+    ML_UNUSUAL_TRANSACTION_RULE_ID,
+)
 from app.services.budget_metrics import normalize_month
 
 logger = logging.getLogger(__name__)
@@ -23,9 +27,9 @@ logger = logging.getLogger(__name__)
 MODEL_PATH = Path(__file__).resolve().parents[1] / "ml" / "models" / "spending_forecaster.joblib"
 DEFAULT_MODEL_NAME = "BizMoneyAI Model 3 Spending Forecaster"
 MODEL_FAMILY = "bizmoneyai_spending_forecast"
-UNUSUAL_TRANSACTION_RULE_ID = "ml_unusual_transaction"
+UNUSUAL_TRANSACTION_RULE_ID = ML_UNUSUAL_TRANSACTION_RULE_ID
 UNUSUAL_TRANSACTION_SEVERITIES = ("warning", "critical")
-FORECAST_RISK_RULE_ID = "ml_spending_forecast_risk"
+FORECAST_RISK_RULE_ID = ML_SPENDING_FORECAST_RISK_RULE_ID
 FORECAST_RISK_SOURCE = "spending_forecaster"
 MEANINGFUL_OVER_BUDGET_FLOOR = 100.0
 MEANINGFUL_OVER_BUDGET_RATIO = 0.10

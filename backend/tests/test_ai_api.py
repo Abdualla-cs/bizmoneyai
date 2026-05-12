@@ -12,6 +12,13 @@ from app.models.category import Category
 from app.models.system_log import SystemLog
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.ai_insight_rules import (
+    ML_BUDGET_RECOMMENDATION_RULE_ID,
+    ML_INSIGHT_RULE_IDS,
+    ML_SPENDING_FORECAST_RISK_RULE_ID,
+    ML_SPENDING_FORECAST_RULE_ID,
+    ML_UNUSUAL_TRANSACTION_RULE_ID,
+)
 
 
 def _build_authenticated_client(db_session, user: User) -> TestClient:
@@ -304,7 +311,7 @@ def test_ai_clear_insights_deletes_only_current_users_insights_and_preserves_oth
         assert response.status_code == 200
         assert response.json() == {
             "deleted_count": 2,
-            "message": "Rule-based AI insights cleared successfully. Fraud alerts were preserved.",
+            "message": "Rule-based AI insights cleared successfully. ML-generated insights were preserved.",
         }
         assert db_session.query(AIInsight).filter(AIInsight.user_id == user.user_id).count() == 0
         assert db_session.query(AIInsight).filter(AIInsight.user_id == other_user.user_id).count() == 1
@@ -315,7 +322,7 @@ def test_ai_clear_insights_deletes_only_current_users_insights_and_preserves_oth
         app.dependency_overrides.clear()
 
 
-def test_ai_clear_insights_preserves_unusual_transaction_alerts_and_transaction_badges(db_session):
+def test_ai_clear_insights_preserves_ml_insights_and_transaction_badges(db_session):
     user = User(name="Clear Fraud Alert User", email="clear-fraud-alert@example.com", password_hash="x")
     db_session.add(user)
     db_session.commit()
@@ -362,7 +369,7 @@ def test_ai_clear_insights_preserves_unusual_transaction_alerts_and_transaction_
             ),
             AIInsight(
                 user_id=user.user_id,
-                rule_id="ml_unusual_transaction",
+                rule_id=ML_UNUSUAL_TRANSACTION_RULE_ID,
                 title="Critical Unusual Transaction Detected",
                 message="Critical unusual transaction detected. Review this transaction immediately.",
                 severity="critical",
@@ -373,6 +380,46 @@ def test_ai_clear_insights_preserves_unusual_transaction_alerts_and_transaction_
                     "transaction_id": suspicious_tx.transaction_id,
                     "risk_level": "critical",
                     "fraud_probability": 0.91,
+                },
+            ),
+            AIInsight(
+                user_id=user.user_id,
+                rule_id=ML_SPENDING_FORECAST_RISK_RULE_ID,
+                title="Forecasted Spending May Exceed Budget",
+                message="Your forecasted spending for next month may exceed your budget.",
+                severity="warning",
+                period_start=date(2026, 5, 1),
+                period_end=date(2026, 5, 31),
+                metadata_json={
+                    "scope_key": "forecast_month:2026-05-01",
+                    "source": "spending_forecaster",
+                    "forecast_vs_budget": 250.0,
+                    "confidence_level": "medium",
+                },
+            ),
+            AIInsight(
+                user_id=user.user_id,
+                rule_id=ML_SPENDING_FORECAST_RULE_ID,
+                title="Legacy Forecast Insight",
+                message="Legacy forecast insight.",
+                severity="warning",
+                period_start=date(2026, 5, 1),
+                period_end=date(2026, 5, 31),
+                metadata_json={"scope_key": "legacy_forecast:2026-05-01"},
+            ),
+            AIInsight(
+                user_id=user.user_id,
+                rule_id=ML_BUDGET_RECOMMENDATION_RULE_ID,
+                title="Marketing Budget May Need Adjustment",
+                message="Your Marketing budget may be too low for next month.",
+                severity="info",
+                period_start=date(2026, 5, 1),
+                period_end=date(2026, 5, 31),
+                metadata_json={
+                    "scope_key": "category:1:target_month:2026-05-01",
+                    "source": "budget_recommender",
+                    "recommended_budget": 750.0,
+                    "current_budget": 500.0,
                 },
             ),
         ]
@@ -395,8 +442,7 @@ def test_ai_clear_insights_preserves_unusual_transaction_alerts_and_transaction_
         assert clear_response.json()["deleted_count"] == 1
 
         remaining_insights = db_session.query(AIInsight).filter(AIInsight.user_id == user.user_id).all()
-        assert len(remaining_insights) == 1
-        assert remaining_insights[0].rule_id == "ml_unusual_transaction"
+        assert {insight.rule_id for insight in remaining_insights} == set(ML_INSIGHT_RULE_IDS)
 
         transactions_response = client.get("/transactions")
         assert transactions_response.status_code == 200
@@ -430,7 +476,7 @@ def test_ai_clear_insights_returns_zero_when_user_has_no_insights(db_session):
         assert response.status_code == 200
         assert response.json() == {
             "deleted_count": 0,
-            "message": "Rule-based AI insights cleared successfully. Fraud alerts were preserved.",
+            "message": "Rule-based AI insights cleared successfully. ML-generated insights were preserved.",
         }
     finally:
         app.dependency_overrides.clear()

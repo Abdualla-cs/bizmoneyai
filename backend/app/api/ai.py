@@ -16,9 +16,9 @@ from app.schemas.ai_insight import (
     AIInsightRankedOut,
     AIInsightTimeSeriesPoint,
 )
+from app.services.ai_insight_rules import ML_INSIGHT_RULE_IDS
 from app.services.admin_analytics import invalidate_admin_analytics_cache
 from app.services import insight_ranker
-from app.services.fraud_insights import UNUSUAL_TRANSACTION_RULE_ID
 from app.services.rules_engine import run_rules_for_user
 from app.services.system_log import log_system_event
 
@@ -91,7 +91,7 @@ def clear_insights(
             AIInsight.user_id == current_user.user_id,
             or_(
                 AIInsight.rule_id.is_(None),
-                AIInsight.rule_id != UNUSUAL_TRANSACTION_RULE_ID,
+                AIInsight.rule_id.notin_(ML_INSIGHT_RULE_IDS),
             ),
         )
         .delete(synchronize_session=False)
@@ -99,18 +99,18 @@ def clear_insights(
     log_system_event(
         db,
         "clear_ai_insights",
-        f"Cleared {deleted_count} non-fraud AI insights",
+        f"Cleared {deleted_count} rule-based AI insights",
         user_id=current_user.user_id,
         metadata={
             "deleted_count": int(deleted_count or 0),
-            "preserved_rule_ids": [UNUSUAL_TRANSACTION_RULE_ID],
+            "preserved_rule_ids": list(ML_INSIGHT_RULE_IDS),
         },
     )
     db.commit()
     invalidate_admin_analytics_cache()
     return AIInsightClearResponse(
         deleted_count=int(deleted_count or 0),
-        message="Rule-based AI insights cleared successfully. Fraud alerts were preserved.",
+        message="Rule-based AI insights cleared successfully. ML-generated insights were preserved.",
     )
 
 
