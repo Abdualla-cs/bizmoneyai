@@ -16,13 +16,27 @@ type Insight = {
   period_start: string;
   period_end: string;
   created_at: string;
+  priority_score?: number;
+  priority_level?: "low" | "medium" | "high" | "critical";
+  priority_reason?: string;
 };
 
 const CARD = { info: "bg-blue-50 border-blue-200", warning: "bg-yellow-50 border-yellow-200", critical: "bg-red-50 border-red-200" };
 const TXT = { info: "text-blue-800", warning: "text-yellow-800", critical: "text-red-800" };
 const BADGE = { info: "bg-blue-100 text-blue-700", warning: "bg-yellow-100 text-yellow-700", critical: "bg-red-100 text-red-700" };
+const PRIORITY_BADGE = {
+  critical: "bg-rose-100 text-rose-700",
+  high: "bg-orange-100 text-orange-700",
+  medium: "bg-sky-100 text-sky-700",
+  low: "bg-slate-200 text-slate-700",
+};
 const today = new Date().toISOString().slice(0, 10);
 const defaultStart = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+function priorityLabel(level?: Insight["priority_level"]) {
+  if (!level) return null;
+  return `${level.charAt(0).toUpperCase()}${level.slice(1)} priority`;
+}
 
 function displayInsightMessage(insight: Insight) {
   if (insight.rule_id !== "ml_unusual_transaction") return insight.message;
@@ -59,10 +73,15 @@ export default function InsightsPage() {
     setLoadingInsights(true);
     setLoadError("");
     try {
-      const r = await api.get<Insight[]>("/ai/insights");
-      setInsights(r.data);
+      const rankedResponse = await api.get<Insight[]>("/ai/insights/ranked");
+      setInsights(rankedResponse.data);
     } catch (error) {
-      setLoadError(readableApiError(error, "Failed to load insights."));
+      try {
+        const fallbackResponse = await api.get<Insight[]>("/ai/insights");
+        setInsights(fallbackResponse.data);
+      } catch (fallbackError) {
+        setLoadError(readableApiError(fallbackError, "Failed to load insights."));
+      }
     } finally {
       setLoadingInsights(false);
     }
@@ -180,9 +199,15 @@ export default function InsightsPage() {
                         <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${BADGE[ins.severity]}`}>
                           {ins.severity.toUpperCase()}
                         </span>
+                        {ins.priority_level && (
+                          <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${PRIORITY_BADGE[ins.priority_level]}`}>
+                            {priorityLabel(ins.priority_level)}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <p className={`text-sm ${TXT[ins.severity]}`}>{displayInsightMessage(ins)}</p>
+                    {ins.priority_reason && <p className="mt-2 text-xs text-slate-500">{ins.priority_reason}</p>}
                     <p className="mt-2 text-xs text-slate-400">
                       Period: {ins.period_start} to {ins.period_end} | Generated: {new Date(ins.created_at).toLocaleString()}
                     </p>
