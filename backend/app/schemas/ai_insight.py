@@ -19,6 +19,12 @@ class AIInsightOut(BaseModel):
         from_attributes = True
 
 
+class AIInsightRankedOut(AIInsightOut):
+    priority_score: float
+    priority_level: Literal["low", "medium", "high", "critical"]
+    priority_reason: str
+
+
 class AIInsightGenerateRequest(BaseModel):
     period_start: date | None = None
     period_end: date | None = None

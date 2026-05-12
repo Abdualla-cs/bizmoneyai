@@ -7,8 +7,9 @@ from app.api.deps import get_current_user
 from app.data_access import InsightQueryFilters, list_insights_for_user, query_insight_timeseries
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.ai_insight import AIInsightGenerateRequest, AIInsightOut, AIInsightTimeSeriesPoint
+from app.schemas.ai_insight import AIInsightGenerateRequest, AIInsightOut, AIInsightRankedOut, AIInsightTimeSeriesPoint
 from app.services.admin_analytics import invalidate_admin_analytics_cache
+from app.services import insight_ranker
 from app.services.rules_engine import run_rules_for_user
 from app.services.system_log import log_system_event
 
@@ -68,6 +69,48 @@ def list_insights(
             severity=severity,
         ),
     )
+
+
+@router.get("/insights/ranked", response_model=list[AIInsightRankedOut])
+def list_ranked_insights(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="date_from must be on or before date_to",
+        )
+
+    insights = list_insights_for_user(
+        db,
+        InsightQueryFilters(
+            user_id=current_user.user_id,
+            date_from=date_from,
+            date_to=date_to,
+            severity=severity,
+        ),
+    )
+    return [
+        AIInsightRankedOut(
+            insight_id=item.insight.insight_id,
+            user_id=item.insight.user_id,
+            rule_id=item.insight.rule_id,
+            title=item.insight.title,
+            message=item.insight.message,
+            severity=item.insight.severity,
+            period_start=item.insight.period_start,
+            period_end=item.insight.period_end,
+            created_at=item.insight.created_at,
+            priority_score=item.priority_score,
+            priority_level=item.priority_level,
+            priority_reason=item.priority_reason,
+        )
+        for item in insight_ranker.rank_insights(insights)
+    ]
 
 
 @router.get("/insights/timeseries", response_model=list[AIInsightTimeSeriesPoint])
