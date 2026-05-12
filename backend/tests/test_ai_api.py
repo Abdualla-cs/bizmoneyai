@@ -7,6 +7,7 @@ from app.core.security import create_access_token
 from app.db.session import get_db
 from app.main import app
 from app.models.ai_insight import AIInsight
+from app.models.budget import Budget
 from app.models.category import Category
 from app.models.system_log import SystemLog
 from app.models.transaction import Transaction
@@ -148,6 +149,18 @@ def test_ai_generate_endpoint_uses_default_period_when_payload_is_omitted(db_ses
         app.dependency_overrides.clear()
 
 
+def test_ai_clear_insights_requires_authentication(db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
+    client = TestClient(app)
+
+    try:
+        response = client.delete("/ai/insights/clear")
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Not authenticated"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_ai_generate_endpoint_does_not_create_duplicate_insights_on_repeated_generation(db_session):
     user = User(name="API Dedupe User", email="api-dedupe@example.com", password_hash="x")
     db_session.add(user)
@@ -204,6 +217,119 @@ def test_ai_generate_endpoint_does_not_create_duplicate_insights_on_repeated_gen
 
         stored_after_second = db_session.query(AIInsight).filter(AIInsight.user_id == user.user_id).count()
         assert stored_after_second == stored_after_first
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ai_clear_insights_deletes_only_current_users_insights_and_preserves_other_data(db_session):
+    user = User(name="Clear Insight User", email="clear-insight@example.com", password_hash="x")
+    other_user = User(name="Other Insight User", email="other-clear-insight@example.com", password_hash="x")
+    db_session.add_all([user, other_user])
+    db_session.commit()
+    db_session.refresh(user)
+    db_session.refresh(other_user)
+
+    income = Category(user_id=user.user_id, name="Sales", type="income")
+    expense = Category(user_id=user.user_id, name="Operations", type="expense")
+    other_income = Category(user_id=other_user.user_id, name="Sales", type="income")
+    db_session.add_all([income, expense, other_income])
+    db_session.commit()
+    db_session.refresh(income)
+    db_session.refresh(expense)
+    db_session.refresh(other_income)
+
+    db_session.add_all(
+        [
+            Transaction(
+                user_id=user.user_id,
+                category_id=income.category_id,
+                amount=1500.0,
+                type="income",
+                description="User revenue",
+                date=date(2026, 4, 5),
+            ),
+            Transaction(
+                user_id=user.user_id,
+                category_id=expense.category_id,
+                amount=400.0,
+                type="expense",
+                description="User expense",
+                date=date(2026, 4, 7),
+            ),
+            Budget(
+                user_id=user.user_id,
+                category_id=expense.category_id,
+                amount=500.0,
+                month=date(2026, 4, 1),
+                note="April operations",
+            ),
+            AIInsight(
+                user_id=user.user_id,
+                rule_id="expense_ratio",
+                title="User Insight One",
+                message="User insight one",
+                severity="warning",
+                period_start=date(2026, 4, 1),
+                period_end=date(2026, 4, 30),
+                metadata_json={"scope_key": "period"},
+            ),
+            AIInsight(
+                user_id=user.user_id,
+                rule_id="income_drop_percent",
+                title="User Insight Two",
+                message="User insight two",
+                severity="info",
+                period_start=date(2026, 4, 1),
+                period_end=date(2026, 4, 30),
+                metadata_json={"scope_key": "period"},
+            ),
+            AIInsight(
+                user_id=other_user.user_id,
+                rule_id="expense_ratio",
+                title="Other User Insight",
+                message="Other user insight",
+                severity="critical",
+                period_start=date(2026, 4, 1),
+                period_end=date(2026, 4, 30),
+                metadata_json={"scope_key": "period"},
+            ),
+        ]
+    )
+    db_session.commit()
+
+    client = _build_authenticated_client(db_session, user)
+
+    try:
+        response = client.delete("/ai/insights/clear")
+        assert response.status_code == 200
+        assert response.json() == {
+            "deleted_count": 2,
+            "message": "AI insights cleared successfully.",
+        }
+        assert db_session.query(AIInsight).filter(AIInsight.user_id == user.user_id).count() == 0
+        assert db_session.query(AIInsight).filter(AIInsight.user_id == other_user.user_id).count() == 1
+        assert db_session.query(Transaction).filter(Transaction.user_id == user.user_id).count() == 2
+        assert db_session.query(Budget).filter(Budget.user_id == user.user_id).count() == 1
+        assert db_session.query(Category).filter(Category.user_id == user.user_id).count() == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ai_clear_insights_returns_zero_when_user_has_no_insights(db_session):
+    user = User(name="No Insight User", email="no-clear-insight@example.com", password_hash="x")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    client = _build_authenticated_client(db_session, user)
+
+    try:
+        response = client.delete("/ai/insights/clear")
+        assert response.status_code == 200
+        assert response.json() == {
+            "deleted_count": 0,
+            "message": "AI insights cleared successfully.",
+        }
     finally:
         app.dependency_overrides.clear()
 

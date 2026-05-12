@@ -6,8 +6,15 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.data_access import InsightQueryFilters, list_insights_for_user, query_insight_timeseries
 from app.db.session import get_db
+from app.models.ai_insight import AIInsight
 from app.models.user import User
-from app.schemas.ai_insight import AIInsightGenerateRequest, AIInsightOut, AIInsightRankedOut, AIInsightTimeSeriesPoint
+from app.schemas.ai_insight import (
+    AIInsightClearResponse,
+    AIInsightGenerateRequest,
+    AIInsightOut,
+    AIInsightRankedOut,
+    AIInsightTimeSeriesPoint,
+)
 from app.services.admin_analytics import invalidate_admin_analytics_cache
 from app.services import insight_ranker
 from app.services.rules_engine import run_rules_for_user
@@ -68,6 +75,31 @@ def list_insights(
             date_to=date_to,
             severity=severity,
         ),
+    )
+
+
+@router.delete("/insights/clear", response_model=AIInsightClearResponse)
+def clear_insights(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    deleted_count = (
+        db.query(AIInsight)
+        .filter(AIInsight.user_id == current_user.user_id)
+        .delete(synchronize_session=False)
+    )
+    log_system_event(
+        db,
+        "clear_ai_insights",
+        f"Cleared {deleted_count} AI insights",
+        user_id=current_user.user_id,
+        metadata={"deleted_count": int(deleted_count or 0)},
+    )
+    db.commit()
+    invalidate_admin_analytics_cache()
+    return AIInsightClearResponse(
+        deleted_count=int(deleted_count or 0),
+        message="AI insights cleared successfully.",
     )
 
 

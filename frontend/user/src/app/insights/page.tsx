@@ -21,6 +21,11 @@ type Insight = {
   priority_reason?: string;
 };
 
+type ClearInsightsResponse = {
+  deleted_count: number;
+  message: string;
+};
+
 const CARD = { info: "bg-blue-50 border-blue-200", warning: "bg-yellow-50 border-yellow-200", critical: "bg-red-50 border-red-200" };
 const TXT = { info: "text-blue-800", warning: "text-yellow-800", critical: "text-red-800" };
 const BADGE = { info: "bg-blue-100 text-blue-700", warning: "bg-yellow-100 text-yellow-700", critical: "bg-red-100 text-red-700" };
@@ -84,6 +89,7 @@ export default function InsightsPage() {
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [gen, setGen] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [msg, setMsg] = useState("");
   const [periodStart, setPeriodStart] = useState(defaultStart);
   const [periodEnd, setPeriodEnd] = useState(today);
@@ -136,6 +142,24 @@ export default function InsightsPage() {
     }
   };
 
+  const clearInsights = async () => {
+    if (!window.confirm("Are you sure you want to clear all your AI insights?")) {
+      return;
+    }
+
+    setClearing(true);
+    setMsg("");
+    try {
+      const response = await api.delete<ClearInsightsResponse>("/ai/insights/clear");
+      setMsg(response.data.message);
+      await refresh();
+    } catch (error) {
+      setMsg(readableApiError(error, "Failed to clear AI insights."));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   if (loading) {
     return <div className="flex min-h-screen items-center justify-center text-slate-400">Loading...</div>;
   }
@@ -169,6 +193,14 @@ export default function InsightsPage() {
             </div>
             <button onClick={generate} disabled={gen} className="min-w-[180px]">
               {gen ? "Analyzing..." : "Generate Insights"}
+            </button>
+            <button
+              type="button"
+              onClick={clearInsights}
+              disabled={clearing}
+              className="min-w-[180px] bg-red-50 text-red-700 ring-1 ring-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {clearing ? "Clearing..." : "Clear AI Insights"}
             </button>
           </div>
         </div>
