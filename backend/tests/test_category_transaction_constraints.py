@@ -13,7 +13,7 @@ from app.models.transaction import Transaction
 from app.models.user import User
 
 
-def test_transaction_rejects_mismatched_category_type(db_session):
+def test_transaction_create_infers_type_from_selected_category(db_session):
     user = User(name="User", email="type-check@example.com", password_hash="x")
     db_session.add(user)
     db_session.commit()
@@ -34,6 +34,44 @@ def test_transaction_rejects_mismatched_category_type(db_session):
             "category_id": income_category.category_id,
             "amount": 25,
             "type": "expense",
+            "description": "Should infer income",
+            "date": "2026-04-01",
+        },
+    )
+
+    try:
+        assert response.status_code == 201
+        body = response.json()
+        assert body["type"] == "income"
+
+        transaction = db_session.get(Transaction, body["transaction_id"])
+        assert transaction is not None
+        assert transaction.type == "income"
+        assert transaction.category_id == income_category.category_id
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_transaction_create_rejects_both_type_category(db_session):
+    user = User(name="Both User", email="both-type@example.com", password_hash="x")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    flexible_category = Category(user_id=user.user_id, name="Flexible", type="both")
+    db_session.add(flexible_category)
+    db_session.commit()
+    db_session.refresh(flexible_category)
+
+    app.dependency_overrides[get_db] = lambda: db_session
+    client = TestClient(app)
+    client.cookies.set("access_token", create_access_token(str(user.user_id)))
+
+    response = client.post(
+        "/transactions",
+        json={
+            "category_id": flexible_category.category_id,
+            "amount": 25,
             "description": "Should fail",
             "date": "2026-04-01",
         },
@@ -41,7 +79,7 @@ def test_transaction_rejects_mismatched_category_type(db_session):
 
     try:
         assert response.status_code == 400
-        assert "only supports income transactions" in response.json()["detail"]
+        assert response.json()["detail"] == "Selected category must be income or expense"
     finally:
         app.dependency_overrides.clear()
 
@@ -67,7 +105,6 @@ def test_transaction_create_rejects_non_positive_amounts(db_session, amount):
         json={
             "category_id": category.category_id,
             "amount": amount,
-            "type": "expense",
             "description": "Invalid amount",
             "date": "2026-04-01",
         },
@@ -140,7 +177,6 @@ def test_transaction_allows_positive_amounts_for_create_and_update(db_session):
         json={
             "category_id": category.category_id,
             "amount": 100,
-            "type": "income",
             "description": "Consulting fee",
             "date": "2026-04-01",
         },

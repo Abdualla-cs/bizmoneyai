@@ -254,7 +254,7 @@ export default function BudgetsPage() {
         <div className="rounded-xl bg-white p-6 shadow">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="font-semibold text-ink">Model 4 Budget Recommendations</h2>
+              <h2 className="font-semibold text-ink">Budget Recommendations</h2>
             </div>
           </div>
 

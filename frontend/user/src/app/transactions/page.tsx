@@ -41,6 +41,7 @@ export default function TransactionsPage() {
   const { user, loading } = useAuth();
   const [cats, setCats] = useState<Cat[]>([]);
   const [txs, setTxs] = useState<Tx[]>([]);
+  const [txLoading, setTxLoading] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editId, setEditId] = useState<number | null>(null);
   const [sug, setSug] = useState<Sug | null>(null);
@@ -54,22 +55,111 @@ export default function TransactionsPage() {
   const [fDateTo, setFDateTo] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const tmrRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeTxRequestRef = useRef(0);
+  const filtersRef = useRef({
+    type: "",
+    category_id: "",
+    date_from: "",
+    date_to: "",
+  });
 
-  const load = async (type = fType, cat = fCat, dateFrom = fDateFrom, dateTo = fDateTo) => {
-    const p = new URLSearchParams();
-    if (type) p.set("type", type);
-    if (cat) p.set("category_id", cat);
-    if (dateFrom) p.set("date_from", dateFrom);
-    if (dateTo) p.set("date_to", dateTo);
-    const [cr, tr] = await Promise.all([api.get<Cat[]>("/categories"), api.get<Tx[]>(`/transactions?${p}`)]);
-    setCats(cr.data);
-    setTxs(tr.data);
+  const getErrorMessage = (error: unknown, fallback: string) => {
+    const detail = isAxiosError(error) ? error.response?.data?.detail : null;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") return detail[0].msg;
+    return fallback;
+  };
+
+  const buildTransactionParams = (type: string, categoryId: string, dateFrom: string, dateTo: string) => {
+    const params: Record<string, string> = {};
+    if (type) params.type = type;
+    if (categoryId) params.category_id = categoryId;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+    return params;
+  };
+
+  const loadCategories = async (signal?: AbortSignal) => {
+    const response = await api.get<Cat[]>("/categories", { signal });
+    setCats(response.data);
+  };
+
+  const loadTransactions = async (
+    filters: { type: string; category_id: string; date_from: string; date_to: string },
+    options?: { signal?: AbortSignal; clearResults?: boolean },
+  ) => {
+    const requestId = ++activeTxRequestRef.current;
+    if (options?.clearResults) {
+      setTxs([]);
+    }
+    setTxLoading(true);
+    try {
+      const response = await api.get<Tx[]>("/transactions", {
+        params: buildTransactionParams(filters.type, filters.category_id, filters.date_from, filters.date_to),
+        signal: options?.signal,
+      });
+      if (requestId !== activeTxRequestRef.current) return;
+      setTxs(response.data);
+    } catch (error: unknown) {
+      if (isAxiosError(error) && error.code === "ERR_CANCELED") return;
+      if (requestId !== activeTxRequestRef.current) return;
+      setError(getErrorMessage(error, "Failed to load transactions."));
+    } finally {
+      if (requestId === activeTxRequestRef.current) {
+        setTxLoading(false);
+      }
+    }
+  };
+
+  const refreshTransactions = async () => {
+    await loadTransactions(filtersRef.current);
+  };
+
+  const onCategoryChange = (value: string) => {
+    const selectedCategory = cats.find((category) => String(category.category_id) === value);
+    setForm((current) => ({
+      ...current,
+      category_id: value,
+      type:
+        selectedCategory?.type === "income" || selectedCategory?.type === "expense"
+          ? selectedCategory.type
+          : current.type,
+    }));
   };
 
   useEffect(() => {
+    filtersRef.current = {
+      type: fType,
+      category_id: fCat,
+      date_from: fDateFrom,
+      date_to: fDateTo,
+    };
+  }, [fType, fCat, fDateFrom, fDateTo]);
+
+  useEffect(() => {
     if (!user) return;
-    load();
-  }, [user, fType, fCat, fDateFrom, fDateTo]); // eslint-disable-line react-hooks/exhaustive-deps
+    const controller = new AbortController();
+    loadCategories(controller.signal).catch((error: unknown) => {
+      if (isAxiosError(error) && error.code === "ERR_CANCELED") return;
+      setError(getErrorMessage(error, "Failed to load categories."));
+    });
+    return () => controller.abort();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const controller = new AbortController();
+    void loadTransactions(
+      {
+        type: fType,
+        category_id: fCat,
+        date_from: fDateFrom,
+        date_to: fDateTo,
+      },
+      { signal: controller.signal, clearResults: true },
+    );
+    return () => controller.abort();
+  }, [user, fType, fCat, fDateFrom, fDateTo]);
 
   const predict = async (text: string) => {
     if (text.trim().length < 3) return;
@@ -114,22 +204,26 @@ export default function TransactionsPage() {
       setError("Category and amount are required.");
       return;
     }
+    const selectedCategory = cats.find((category) => category.category_id === Number(form.category_id));
+    if (editId === null && (!selectedCategory || (selectedCategory.type !== "income" && selectedCategory.type !== "expense"))) {
+      setError("Selected category must be income or expense.");
+      return;
+    }
     setError("");
     setNotice("");
     setUnusualDetection(null);
     setBusy(true);
-    const body = {
+    const baseBody = {
       category_id: Number(form.category_id),
       amount: parseFloat(form.amount),
-      type: form.type,
       description: form.description || null,
       date: form.date,
     };
     try {
       if (editId !== null) {
-        await api.put(`/transactions/${editId}`, body);
+        await api.put(`/transactions/${editId}`, { ...baseBody, type: form.type });
       } else {
-        const response = await api.post<Tx>("/transactions", body);
+        const response = await api.post<Tx>("/transactions", baseBody);
         setUnusualDetection(
           response.data.fraud_risk_level
             ? {
@@ -142,16 +236,9 @@ export default function TransactionsPage() {
       setForm(EMPTY);
       setEditId(null);
       setSug(null);
-      await load();
+      await refreshTransactions();
     } catch (error: unknown) {
-      const detail = isAxiosError(error) ? error.response?.data?.detail : null;
-      if (typeof detail === "string") {
-        setError(detail);
-      } else if (Array.isArray(detail) && typeof detail[0]?.msg === "string") {
-        setError(detail[0].msg);
-      } else {
-        setError("Failed to save.");
-      }
+      setError(getErrorMessage(error, "Failed to save."));
     } finally {
       setBusy(false);
     }
@@ -160,7 +247,7 @@ export default function TransactionsPage() {
   const del = async (id: number) => {
     if (!confirm("Delete?")) return;
     await api.delete(`/transactions/${id}`);
-    await load();
+    await refreshTransactions();
   };
 
   const exportCsv = async () => {
@@ -190,7 +277,8 @@ export default function TransactionsPage() {
       const response = await api.post<ImportResult>("/transactions/import-file", fd, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      await load();
+      await loadCategories();
+      await refreshTransactions();
       const { imported_count, skipped_count } = response.data;
       const unusualCount = response.data.transactions.filter((tx) => tx.fraud_risk_level).length;
       setNotice(
@@ -199,14 +287,7 @@ export default function TransactionsPage() {
           : `Imported ${imported_count} transactions.${unusualCount ? ` Flagged ${unusualCount} unusual transaction${unusualCount === 1 ? "" : "s"}.` : ""}`,
       );
     } catch (error: unknown) {
-      const detail = isAxiosError(error) ? error.response?.data?.detail : null;
-      setError(
-        typeof detail === "string"
-          ? detail
-            : Array.isArray(detail) && typeof detail[0]?.msg === "string"
-              ? detail[0].msg
-            : "File import failed.",
-      );
+      setError(getErrorMessage(error, "File import failed."));
     } finally {
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -272,7 +353,7 @@ export default function TransactionsPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs text-slate-500">Category *</label>
-              <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} className="w-full">
+              <select value={form.category_id} onChange={(e) => onCategoryChange(e.target.value)} className="w-full">
                 <option value="">Select category</option>
                 {cats.map((c) => (
                   <option key={c.category_id} value={c.category_id}>
@@ -292,13 +373,6 @@ export default function TransactionsPage() {
                 onChange={(e) => setForm({ ...form, amount: e.target.value })}
                 className="w-full"
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-slate-500">Type</label>
-              <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as "income" | "expense" })} className="w-full">
-                <option value="income">Income</option>
-                <option value="expense">Expense</option>
-              </select>
             </div>
             <div>
               <label className="mb-1 block text-xs text-slate-500">Date</label>
@@ -360,7 +434,9 @@ export default function TransactionsPage() {
         </div>
 
         <div className="overflow-x-auto rounded-xl bg-white shadow">
-          {txs.length === 0 ? (
+          {txLoading ? (
+            <p className="p-8 text-center text-sm text-slate-400">Loading transactions...</p>
+          ) : txs.length === 0 ? (
             <p className="p-8 text-center text-sm text-slate-400">No transactions found.</p>
           ) : (
             <table className="w-full text-sm">

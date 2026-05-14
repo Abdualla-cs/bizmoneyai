@@ -127,6 +127,24 @@ def test_financial_data_access_supports_timeseries_and_training_extraction(db_se
         assert len(transactions_body) == 1
         assert transactions_body[0]["description"] == "Dinner"
 
+        filtered_transactions_response = client.get(
+            "/transactions",
+            params={
+                "type": "expense",
+                "category_id": food.category_id,
+                "date_from": "2026-03-01",
+                "date_to": "2026-03-31",
+            },
+        )
+        assert filtered_transactions_response.status_code == 200
+        filtered_transactions_body = filtered_transactions_response.json()
+        assert len(filtered_transactions_body) == 1
+        assert filtered_transactions_body[0]["description"] == "Lunch"
+
+        invalid_type_response = client.get("/transactions", params={"type": "invalid"})
+        assert invalid_type_response.status_code == 422
+        assert invalid_type_response.json()["detail"] == "type must be income or expense"
+
         transaction_series_response = client.get("/transactions/timeseries", params={"granularity": "month"})
         assert transaction_series_response.status_code == 200
         transaction_series = transaction_series_response.json()

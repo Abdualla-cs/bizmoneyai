@@ -8,7 +8,7 @@ from sqlalchemy import extract, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.data_access import TransactionQueryFilters, query_transaction_timeseries
+from app.data_access import TransactionQueryFilters, list_transactions_for_user, query_transaction_timeseries
 from app.db.session import get_db
 from app.models.ai_insight import AIInsight
 from app.models.budget import Budget
@@ -111,6 +111,15 @@ def _ensure_category_supports_transaction(category: Category, transaction_type: 
             status_code=400,
             detail=_unsupported_category_type_detail(category, transaction_type, row_number),
         )
+
+
+def _transaction_type_from_category(category: Category) -> str:
+    if category.type not in {"income", "expense"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected category must be income or expense",
+        )
+    return category.type
 
 
 def _transaction_log_metadata(tx: Transaction, category: Category) -> dict[str, object | None]:
@@ -581,21 +590,31 @@ async def _import_transactions_upload(
 def list_transactions(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    transaction_type: str | None = Query(default=None, alias="type"),
+    category_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if transaction_type is not None and transaction_type not in {"income", "expense"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="type must be income or expense",
+        )
     if date_from is not None and date_to is not None and date_from > date_to:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="date_from must be on or before date_to",
         )
-
-    query = db.query(Transaction).filter(Transaction.user_id == current_user.user_id)
-    if date_from is not None:
-        query = query.filter(Transaction.date >= date_from)
-    if date_to is not None:
-        query = query.filter(Transaction.date <= date_to)
-    transactions = query.order_by(Transaction.date.desc(), Transaction.created_at.desc()).all()
+    transactions = list_transactions_for_user(
+        db,
+        TransactionQueryFilters(
+            user_id=current_user.user_id,
+            date_from=date_from,
+            date_to=date_to,
+            transaction_type=transaction_type,  # type: ignore[arg-type]
+            category_id=category_id,
+        ),
+    )
     return _transaction_responses(db, user_id=current_user.user_id, transactions=transactions)
 
 
@@ -644,8 +663,11 @@ def create_transaction(
     current_user: User = Depends(get_current_user),
 ):
     category = _ensure_owned_category(db, payload.category_id, current_user.user_id)
-    _ensure_category_supports_transaction(category, payload.type)
-    tx = Transaction(user_id=current_user.user_id, **payload.model_dump())
+    tx = Transaction(
+        user_id=current_user.user_id,
+        type=_transaction_type_from_category(category),
+        **payload.model_dump(),
+    )
     db.add(tx)
     db.flush()
     log_system_event(

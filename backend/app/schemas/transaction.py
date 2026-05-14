@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 class TransactionCreate(BaseModel):
     category_id: int
     amount: float = Field(gt=0)
-    type: Literal["income", "expense"]
     description: str | None = None
     date: dt_date
 
